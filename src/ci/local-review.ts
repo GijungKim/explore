@@ -8,7 +8,7 @@ import { join, relative, resolve } from "node:path";
 import { runCiReview } from "./pipeline.js";
 import { resolveCommit } from "./workflow-steps.js";
 import { ciLayout, installCommand, type PackageManager } from "./workflow-install.js";
-import { configPlatforms, readExploreConfig, resolveTargetConfig, configTargets, posedTargets, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { captureUsesExpoServices, configPlatforms, readExploreConfig, resolveTargetConfig, configTargets, posedTargets, withRunOverrides, DEFAULT_EXPLORE_CONFIG_PATH, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { AGENT_PROVIDERS, defaultExploreConfig } from "../config/setup.js";
 import type { PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
@@ -55,6 +55,8 @@ export type LocalReviewOptions = {
   simulator?: string | undefined;
   /** `--repack`: where the app is repacked with the route observer, over the config's `capture.repack`. */
   repack?: string | undefined;
+  /** `--build`: where the native app is built, over the config's `capture.build`. */
+  build?: string | undefined;
   /** Reuse and keep captures in the local capture cache (default true). */
   cache?: boolean | undefined;
   configPath?: string | undefined;
@@ -459,9 +461,11 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const platforms = configPlatforms(rawConfig).filter(platform => targets.some(target => target.platform === platform));
     const repository = repositoryName(root, rawConfig);
 
-    // Credentials: tokens and keys when set, otherwise your own logins.
+    // Credentials: a fully local capture (local build, repack, and simulator) needs no Expo login at
+    // all; otherwise tokens and keys when set, otherwise your own logins.
+    const needsExpoServices = targets.some(target => captureUsesExpoServices(withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { simulator: options.simulator, repack: options.repack, build: options.build })));
     const useLocalEasSession = !environment.EXPO_TOKEN?.trim();
-    if (useLocalEasSession && !options.runner) {
+    if (needsExpoServices && useLocalEasSession && !options.runner) {
       const whoami = spawnSync(packageBin("eas-cli", "eas"), ["whoami"], { cwd: projects.head, env: environment, encoding: "utf8", timeout: 60_000 });
       if (whoami.status !== 0) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight", message: "You are not logged in to Expo Services.",
         nextAction: "Run eas login (or set EXPO_TOKEN), then rerun." });
@@ -477,7 +481,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     });
     // The targets run at once, as CI runs them in parallel jobs: each on its own simulators, with its own output.
     const captureTarget = async (target: RunTarget): Promise<LocalReviewReport> => {
-      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator, repack: options.repack });
+      const config = withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { scope: options.scope, expiresIn: options.expiresIn, controller: options.controller, simulator: options.simulator, repack: options.repack, build: options.build });
       const platform = target.platform;
       const output = join(work, target.id); await mkdir(output);
       outputs.push(output);

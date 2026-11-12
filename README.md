@@ -1,5 +1,12 @@
 # Expo Explore
 
+> **Local-first fork.** This fork keeps Explore's principles and moves every
+> paid Expo Services step (cloud builds, hosted repacks, Expo Simulators,
+> hosted reports) onto your own machine by default. No Expo account or
+> `EXPO_TOKEN` is needed for a local capture. See [docs/local.md](docs/local.md);
+> the upstream documentation below still applies, with `eas` as an opt-in
+> per-step choice instead of the default.
+
 Explore maps your app: a screenshot of every screen, connected by the taps between them. On each pull request it captures the screens the PR changes, before and after, on Expo Simulators, and posts a visual review. On your Mac it can also run on a local simulator.
 
 <picture>

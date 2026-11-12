@@ -8,7 +8,7 @@ import type { CaptureBundle } from "../contracts/capture.js";
 import type { SourceCapturePlan } from "../source/capture-plan.js";
 import type { CommandRunner } from "../capture/run.js";
 import { runBaselineCi } from "./pipeline.js";
-import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, captureUsesExpoServices, configTargets, readExploreConfig, readExploreInstructions, resolveTargetConfig, withRunOverrides, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { explorationSecretNames } from "../config/exploration-inputs.js";
 import { controllerCached } from "../shared/controller-cache.js";
 import { androidTools, hostEmulatorAbi, localSimulatorTarget, localSystemImage } from "../capture/local-simulator.js";
@@ -16,6 +16,7 @@ import { ARGENT_VERSION } from "../shared/argent-version.js";
 import { AGENT_PROVIDERS as PROVIDERS, DRAFT_INSTRUCTIONS_MARKER, EXPO_TOKENS_URL as TOKENS, appConfig, simulatorProfiles } from "../config/setup.js";
 import { captureCompatibility } from "../capture/observer.js";
 import { assertCaptureEasProfile, assertSimulatorAvailable, repackProfileFrom, unreproducibleEasVariables } from "../capture/eas-build.js";
+import { isRecord, parseJson } from "../capture/common.js";
 import { createCiAgentSession } from "../capture/agent/session.js";
 import { readRouteEntry, type RouteEntry, type RouteEntryReport } from "./route-entry.js";
 import { LEGACY_VENDOR_DIRECTORY, OPTIONAL_WORKFLOW_FILES, WORKFLOW_FILES, ciLayout, renderWorkflow, workflowIssues, workflowTemplateDrift, workflowVersion } from "./workflow-install.js";
@@ -55,6 +56,8 @@ export type DoctorOptions = {
   simulator?: string | undefined;
   /** `--repack`: where the app is repacked, over the config's `capture.repack`. */
   repack?: string | undefined;
+  /** `--build`: where the native app is built, over the config's `capture.build`. */
+  build?: string | undefined;
   run?: DoctorRun;
   environment?: NodeJS.ProcessEnv;
   nodeVersion?: string;
@@ -228,6 +231,32 @@ async function easChecks(project: string, config: ExploreConfig, run: DoctorRun,
   catch { return [{ step: 1, id: "eas-cli", status: "fail", code: "EXPLORE_TOOLS_MISSING",
     message: "The EAS CLI that Explore pins is not installed.", nextAction: "Reinstall @expo/explore with optional dependencies, then rerun doctor." }]; }
   const checks: DoctorCheck[] = [];
+  // A fully local capture (local build, repack, and simulator) never signs in to Expo Services:
+  // the profile is read from eas.json on this machine and the app is built with `eas build --local`.
+  const initialTargets = runTargets(config, { simulator });
+  if (initialTargets.length && initialTargets.every(target => !captureUsesExpoServices(target))) {
+    checks.push({ step: 1, id: "eas-local", status: "pass", message: "Local capture: no Expo Services login, build, or simulator session is used; the app builds on this machine (eas build --local)." });
+    checks.push(...await localSimulatorChecks(project, initialTargets, run, environment));
+    for (const target of resolvedTargets(config)) {
+      const { platform, easProfile, bundleId } = target.app;
+      const resolved = run(eas, ["config", "--platform", platform, "--profile", easProfile, "--json", "--non-interactive"], project);
+      if (resolved.status !== 0) {
+        checks.push({ step: 2, id: "eas-profile", status: "fail", code: "EAS_CONFIG_FAILED", message: `eas config failed for profile ${easProfile} (${platform}): ${lastLine(resolved.stderr || resolved.stdout)}`,
+          nextAction: "Install the app dependencies and supply any environment the app config needs, then rerun doctor." });
+        continue;
+      }
+      try {
+        const value = parseJson(resolved.stdout, "eas config");
+        if (!isRecord(value) || !isRecord(value.appConfig) || !isRecord(value.buildProfile)) throw new Error("eas config did not return an app config and build profile");
+        assertCaptureEasProfile({ appConfig: value.appConfig, buildProfile: value.buildProfile }, bundleId, platform);
+        checks.push({ step: 2, id: "eas-profile", status: "pass", message: platform === "ios"
+          ? `Profile ${easProfile} builds ${bundleId} for the iOS Simulator (built locally).` : `Profile ${easProfile} builds ${bundleId} as an Android APK (built locally).` });
+      } catch (error) {
+        checks.push(fromError(2, "eas-profile", error, { code: "EAS_CONFIG_FAILED", nextAction: "Check the profile in eas.json and rerun doctor." }));
+      }
+    }
+    return checks;
+  }
   const who = run(eas, ["whoami"], project);
   if (who.status !== 0) {
     checks.push({ step: 1, id: "eas-login", status: "fail", code: "EAS_NOT_AUTHENTICATED", message: "The EAS CLI is not signed in.",
@@ -465,7 +494,7 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     return { ok: false, mode: null, checks, ...(routes ? { routes } : {}) };
   }
   let config: ExploreConfig;
-  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller, simulator: options.simulator, repack: options.repack }); }
+  try { config = withRunOverrides(await readExploreConfig(project), { controller: options.controller, simulator: options.simulator, repack: options.repack, build: options.build }); }
   catch (error) {
     checks.push(fromError(4, "config", error, { code: "CONFIG_INVALID", nextAction: `Correct ${DEFAULT_EXPLORE_CONFIG_PATH} and rerun doctor.` }));
     return { ok: false, mode: null, checks };
@@ -549,7 +578,13 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
     }
   }
   const secretNames = referencedSecretNames(config, instructions);
-  const files = await ciFileChecks(project, secretNames, run, options.online !== false, configTargets(config).length, !!config.targets);
+  const doctorTargets = runTargets(config, { simulator: options.simulator });
+  const localOnly = doctorTargets.length > 0 && doctorTargets.every(target => !captureUsesExpoServices(target));
+  const files = localOnly ? { checks: [], root: undefined } : await ciFileChecks(project, secretNames, run, options.online !== false, configTargets(config).length, !!config.targets);
+  if (localOnly) {
+    checks.push({ step: 6, id: "ci-files", status: "skip", message: "CI workflows are not needed for a local capture; run `expo-explore capture` on this machine." });
+    checks.push({ step: 7, id: "github", status: "skip", message: "Repository secrets are not needed for a local capture (no EXPO_TOKEN)." });
+  }
   checks.push(...files.checks);
   if (files.root) {
     const pending = run("git", ["status", "--porcelain", "--untracked-files=all", "--", DEFAULT_EXPLORE_CONFIG_PATH, ...(config.agent?.instructions ? [config.agent.instructions] : [])], project).stdout
@@ -561,8 +596,8 @@ export async function runDoctor(options: DoctorOptions): Promise<DoctorReport> {
   }
   if (options.online !== false) checks.push(...await easChecks(project, config, run, environment, options.simulator));
   else checks.push({ step: 1, id: "eas", status: "skip", message: "Expo Services login, project, simulator access and build profile were not checked (--offline)." });
-  if (options.github !== false && files.root) checks.push(...githubChecks(files.root, config, secretNames, run));
-  else if (files.root) checks.push({ step: 7, id: "github", status: "skip", message: `Repository settings were not checked (${options.online === false ? "--offline" : "--no-github"}).` });
+  if (!localOnly && options.github !== false && files.root) checks.push(...githubChecks(files.root, config, secretNames, run));
+  else if (!localOnly && files.root) checks.push({ step: 7, id: "github", status: "skip", message: `Repository settings were not checked (${options.online === false ? "--offline" : "--no-github"}).` });
   checks.sort((a, b) => a.step - b.step);
   return { ok: !checks.some(check => check.status === "fail"), mode: config.mode, checks, ...(routes ? { routes } : {}) };
 }
@@ -647,7 +682,7 @@ function argentCheck(environment: NodeJS.ProcessEnv, androidOnEas: boolean): Doc
       message: `${release}The simulator's host switches the appearance, so every appearance the config asks for is captured.` };
 }
 
-export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
+export async function runCaptureCheck(options: { project: string; output: string; platform?: ExplorePlatform; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; build?: string | undefined; target?: string | undefined; environment?: NodeJS.ProcessEnv; runner?: CommandRunner; progress?: Progress }): Promise<CaptureCheckResult> {
   const project = await realpath(options.project);
   const git = (...args: string[]) => spawnSync("git", ["-C", project, ...args], { encoding: "utf8", timeout: 10_000 });
   const head = git("rev-parse", "HEAD");
@@ -659,7 +694,7 @@ export async function runCaptureCheck(options: { project: string; output: string
     nextAction: "Commit your changes, including .expo-explore (a local commit is enough; nothing is pushed), then rerun. "
       + "To keep unrelated files, run it from a clean checkout instead: git worktree add --detach ../app-capture HEAD, install the app's dependencies there, and run doctor --capture in it." });
   const commit = head.stdout.trim();
-  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project), { platform: options.platform, target: options.target }), { controller: options.controller, simulator: options.simulator, repack: options.repack });
+  const config = withRunOverrides(resolveTargetConfig(await readExploreConfig(project), { platform: options.platform, target: options.target }), { controller: options.controller, simulator: options.simulator, repack: options.repack, build: options.build });
   // Capture keeps its working directories in the system temporary directory, outside the app.
   await mkdir(options.output, { recursive: true });
   const output = await realpath(options.output);

@@ -108,8 +108,10 @@ export type ExploreConfig = {
     repack?: "eas" | "local"; appearance: AppearanceSetting; launch: LaunchSetting; reset: RouteResetSetting; unattributed: UnattributedSetting; readinessSeconds?: number;
     /** The device controller; absent means agent-device, so configs that never chose one keep their cache recipes. */
     controller?: "argent";
-    /** Where the app runs: Expo Simulators when absent, or `local`, a simulator Explore creates on this Mac for the run. */
-    simulator?: "local" };
+    /** Where the app runs: `local` (the fork default), a simulator Explore creates on this Mac for the run, or Expo Simulators when set to `eas`. */
+    simulator?: "local";
+    /** Where the native app is built, when the config chooses; captureBuild gives the default. */
+    build?: "eas" | "local" };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
@@ -310,9 +312,9 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   const exploration = optionalRecord(root.exploration, "exploration");
   exactKeys(exploration, ["scope", "exclude"], "exploration");
   const capture = optionalRecord(root.capture, "capture");
-  exactKeys(capture, ["maxMinutes", "maxActions", "maxSessions", "baselineWaitMinutes", "repack", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
+  exactKeys(capture, ["maxMinutes", "maxActions", "maxSessions", "baselineWaitMinutes", "repack", "build", "appearance", "launch", "reset", "unattributed", "readinessSeconds", "controller", "simulator"], "capture");
   const controller = literal(capture.controller, ["agent-device", "argent"] as const, "capture.controller", "agent-device");
-  const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "eas");
+  const simulator = literal(capture.simulator, ["eas", "local"] as const, "capture.simulator", "local");
   const mode = literal(root.mode, ["deterministic", "agent"] as const, "mode", "deterministic");
   const name = optionalText(app.name, "app.name", 128);
   const scheme = app.scheme === undefined ? undefined : customScheme(app.scheme, "app.scheme");
@@ -336,7 +338,8 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   }
   const report = reportConfig(root.report);
   const ci = ciConfig(root.ci);
-  return {
+  const build = capture.build === undefined ? undefined : literal(capture.build, ["eas", "local"] as const, "capture.build");
+  const result: ExploreConfig = {
     mode,
     app: {
       ...(name === undefined ? {} : { name }),
@@ -374,6 +377,8 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
     ...(report === undefined ? {} : { report }),
     ...(ci === undefined ? {} : { ci }),
   };
+  if (build !== undefined) result.capture.build = build;
+  return result;
 }
 
 function applicationId(value: unknown, label: string): string {
@@ -493,7 +498,8 @@ export function resolveTargetConfig(config: ExploreConfig, selection: { target?:
   const { controller: _controller, simulator: _simulator, ...capture } = config.capture;
   void _controller; void _simulator;
   const controller = entry.controller ?? config.capture.controller ?? "agent-device";
-  const simulator = entry.simulator ?? config.capture.simulator ?? "eas";
+  // A validated config stores `local` (the fork default) and leaves `eas` unset; anything else unset is a cloud run.
+  const simulator = entry.simulator ?? (config.capture.simulator === "local" ? "local" : "eas");
   return { ...rest, target: chosen,
     capture: { ...capture, ...(controller === "argent" ? { controller } : {}), ...(simulator === "local" ? { simulator } : {}) },
     app: { ...config.app, platform: entry.platform, bundleId: entry.bundleId ?? config.app.bundleId, easProfile: entry.easProfile ?? config.app.easProfile },
@@ -540,11 +546,15 @@ export function resolvePlatformConfig(config: ExploreConfig, platform: ExplorePl
  * every screen (`scope: all`). `expiresIn` (`--expires-in`) is accepted from workflows written before Explore stopped
  * setting an expiry, and changes nothing.
  */
-export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined }): ExploreConfig {
+export function withRunOverrides(config: ExploreConfig, overrides: { scope?: string | undefined; expiresIn?: string | undefined; controller?: string | undefined; simulator?: string | undefined; repack?: string | undefined; build?: string | undefined }): ExploreConfig {
   let result = config;
   if (overrides.repack !== undefined) {
     if (overrides.repack !== "eas" && overrides.repack !== "local") fail("--repack must be eas or local", "--repack");
     result = { ...result, capture: { ...result.capture, repack: overrides.repack } };
+  }
+  if (overrides.build !== undefined) {
+    if (overrides.build !== "eas" && overrides.build !== "local") fail("--build must be eas or local", "--build");
+    result = { ...result, capture: { ...result.capture, build: overrides.build } };
   }
   if (overrides.controller !== undefined) {
     if (overrides.controller !== "agent-device" && overrides.controller !== "argent") fail("--controller must be agent-device or argent", "--controller");
@@ -569,6 +579,20 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
  */
 export function captureRepack(config: ExploreConfig): "eas" | "local" {
   return config.capture.repack ?? (config.capture.simulator === "local" ? "local" : "eas");
+}
+
+/**
+ * Where a capture builds the native app: the config's choice, else on this machine (`eas build --local`)
+ * whenever the app runs on a local simulator, and on Expo Services otherwise. The fork defaults the
+ * simulator to local, so an unconfigured capture builds locally too.
+ */
+export function captureBuild(config: ExploreConfig): "eas" | "local" {
+  return config.capture.build ?? (config.capture.simulator === "local" ? "local" : "eas");
+}
+
+/** Whether a capture needs Expo Services at all (a cloud build, a hosted repack, or an Expo Simulators session). */
+export function captureUsesExpoServices(config: ExploreConfig): boolean {
+  return captureBuild(config) === "eas" || captureRepack(config) === "eas" || config.capture.simulator !== "local";
 }
 
 /**

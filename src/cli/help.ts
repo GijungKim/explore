@@ -27,10 +27,10 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
         capture.controller in config.yaml); on Expo Simulators Argent captures one appearance, since it cannot switch it yet;
-        --simulator local runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore starts on this
-        machine, instead of Expo Simulators, and removes it afterwards (or set capture.simulator in config.yaml); builds
-        still run on Expo Services, and the host switches appearance for either controller; the app is repacked with the route
-        observer on this machine too (--repack eas, or capture.repack, keeps the hosted Expo Workflows job);
+        --simulator local (the fork default) runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore
+        starts on this machine and removes it afterwards; the app is built on this machine too (eas build --local,
+        --build eas or capture.build in config.yaml builds on Expo Services instead) and repacked with the route
+        observer on this machine (--repack eas, or capture.repack, keeps the hosted Expo Workflows job);
         with targets in config.yaml it reviews them at once, up to capture.maxSessions (--parallel N at most N at a time; the targets of a platform
         share each commit's build), --target ID one of them, --platform those of a platform)
   view [--catalog FILE] [--port N] [--no-open]
@@ -45,8 +45,8 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
 
 const BINARY = `Prebuilt apps (no source needed; runs with your local claude or codex login):
   explore:binary <app.apk | app.app | app.tar.gz | simulator .ipa> [--output DIRECTORY] [--simulator eas|local] [--no-upload] [--json]
-       (installs the archive in a fresh Expo Simulators session, lets the model explore it, writes a map
-        and report under --output, hosts the report on Expo Hosting, and prints the link)
+       (installs the archive in a fresh simulator session (on this machine by default in this fork), lets the model
+        explore it, writes a map and report under --output, and opens it in the local Viewer)
        --simulator local runs it on a simulator or emulator it starts on this machine instead, with no Expo Services login,
         and opens the report in the local Viewer (--upload hosts it instead, --no-open skips the Viewer, --port N);
         iOS needs Xcode, Android the SDK (ANDROID_HOME) with platform-tools, cmdline-tools, the emulator and a system image for this Mac

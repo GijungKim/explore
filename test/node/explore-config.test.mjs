@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { tsImport } from "tsx/esm/api";
 
-const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides, captureRepack, hostedRepackPeers } =
+const { DEFAULT_EXPLORE_CONFIG_PATH, assertExecutionMode, parseExploreConfig, readExploreConfig, validateExploreConfig, configPlatforms, configTargets, resolvePlatformConfig, resolveTargetConfig, withRunOverrides, captureRepack, captureBuild, captureUsesExpoServices, hostedRepackPeers } =
   await tsImport("../../src/config/explore-config.ts", import.meta.url);
 
 const SOURCE = `app:
@@ -24,7 +24,7 @@ test("normalizes current configuration with deterministic defaults and no versio
     mode: "deterministic",
     app: { name: "Example", platform: "ios", bundleId: "com.example.app", easProfile: "explore", scheme: "example-app" },
     device: { name: "iPhone 17 Pro" }, navigation: { provider: "auto" },
-    exploration: { scope: "changes" }, capture: { maxMinutes: 30, maxActions: 500, appearance: "auto", launch: "screenshot", reset: "root-link", unattributed: "publish" },
+    exploration: { scope: "changes" }, capture: { maxMinutes: 30, maxActions: 500, appearance: "auto", launch: "screenshot", reset: "root-link", unattributed: "publish", simulator: "local" },
   });
   assert.deepEqual(validateExploreConfig({ ...base(), navigation: { provider: "react-navigation", entry: "src/navigation/Root.tsx" }, exploration: { scope: "all" } }).navigation,
     { provider: "react-navigation", entry: "src/navigation/Root.tsx" });
@@ -273,10 +273,11 @@ test("--controller overrides the config's controller for one run and is validate
   assert.throws(() => withRunOverrides(plain, { controller: "appium" }), /--controller must be agent-device or argent/);
 });
 
-test("capture.simulator: local runs on a simulator on this Mac; eas, the default, leaves the config as it was", () => {
+test("capture.simulator: local, the fork default, runs on a simulator on this Mac; eas leaves the config without it", () => {
   const plain = validateExploreConfig(base());
-  assert.equal("simulator" in plain.capture, false);
-  assert.deepEqual(validateExploreConfig({ ...base(), capture: { simulator: "eas" } }), plain);
+  assert.equal(plain.capture.simulator, "local");
+  const cloud = validateExploreConfig({ ...base(), capture: { simulator: "eas" } });
+  assert.equal("simulator" in cloud.capture, false);
   assert.equal(validateExploreConfig({ ...base(), capture: { simulator: "local" } }).capture.simulator, "local");
   assert.throws(() => validateExploreConfig({ ...base(), capture: { simulator: "device-farm" } }), error => error.code === "CONFIG_INVALID");
 });
@@ -284,12 +285,14 @@ test("capture.simulator: local runs on a simulator on this Mac; eas, the default
 test("the repack runs on this machine with a local simulator and in Expo Services otherwise, unless the config or --repack chooses", () => {
   const plain = validateExploreConfig(base());
   assert.equal("repack" in plain.capture, false, "an unset repack is resolved where it is used");
-  assert.equal(captureRepack(plain), "eas");
+  assert.equal(captureRepack(plain), "local", "the fork default simulator is local, so its repack is too");
+  assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { simulator: "eas" } })), "eas");
   assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { simulator: "local" } })), "local");
   assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { simulator: "local", repack: "eas" } })), "eas");
   assert.equal(captureRepack(validateExploreConfig({ ...base(), capture: { repack: "local" } })), "local");
   // --simulator local brings the local repack with it; --repack wins over both.
   assert.equal(captureRepack(withRunOverrides(plain, { simulator: "local" })), "local");
+  assert.equal(captureRepack(withRunOverrides(plain, { simulator: "eas" })), "eas");
   assert.equal(captureRepack(withRunOverrides(plain, { simulator: "local", repack: "eas" })), "eas");
   assert.equal(captureRepack(withRunOverrides(plain, { repack: "local" })), "local");
   assert.throws(() => withRunOverrides(plain, { repack: "remote" }), /--repack must be eas or local/);
@@ -300,8 +303,23 @@ test("--simulator overrides the config's simulator for one run and is validated"
   const plain = validateExploreConfig(base());
   const local = withRunOverrides(plain, { simulator: "local" });
   assert.equal(local.capture.simulator, "local");
-  assert.deepEqual(withRunOverrides(local, { simulator: "eas" }), plain);
+  const cloud = validateExploreConfig({ ...base(), capture: { simulator: "eas" } });
+  assert.deepEqual(withRunOverrides(local, { simulator: "eas" }), cloud);
   assert.throws(() => withRunOverrides(plain, { simulator: "remote" }), /--simulator must be eas or local/);
+});
+
+test("capture.build: local with a local simulator, on Expo Services only when a cloud piece is chosen", () => {
+  const plain = validateExploreConfig(base());
+  assert.equal("build" in plain.capture, false, "an unset build is resolved where it is used");
+  assert.equal(captureBuild(plain), "local");
+  assert.equal(captureBuild(validateExploreConfig({ ...base(), capture: { simulator: "eas" } })), "eas");
+  assert.equal(captureBuild(validateExploreConfig({ ...base(), capture: { build: "eas" } })), "eas");
+  assert.equal(captureBuild(withRunOverrides(plain, { build: "eas" })), "eas");
+  assert.throws(() => withRunOverrides(plain, { build: "remote" }), /--build must be eas or local/);
+  assert.equal(captureUsesExpoServices(plain), false);
+  assert.equal(captureUsesExpoServices(validateExploreConfig({ ...base(), capture: { simulator: "eas" } })), true);
+  assert.equal(captureUsesExpoServices(validateExploreConfig({ ...base(), capture: { repack: "eas" } })), true);
+  assert.equal(captureUsesExpoServices(validateExploreConfig({ ...base(), capture: { build: "eas" } })), true);
 });
 
 test("device.pose folds the primary platform's device and is validated", () => {
@@ -364,7 +382,7 @@ test("target ids and entries are validated", () => {
 });
 
 test("the targets that repack one app on Expo Services are its repack peers, led by the first in config order", () => {
-  const config = validateExploreConfig({ ...base(), targets: {
+  const config = validateExploreConfig({ ...base(), capture: { simulator: "eas" }, targets: {
     iphone: { platform: "ios" },
     "duo-closed": { platform: "ios", device: "iPhone Duo", pose: "closed" },
     "duo-open": { platform: "ios", device: "iPhone Duo", pose: "open" },
@@ -382,12 +400,13 @@ test("the targets that repack one app on Expo Services are its repack peers, led
   assert.deepEqual(peers("iphone", { simulator: "local" }), []);
   assert.deepEqual(peers("iphone", { simulator: "local", repack: "eas" }), ["iphone", "duo-closed", "duo-open", "local"]);
   // A config whose own repack setting makes one target local leaves it out of the others' peers under the same override.
-  const mixed = validateExploreConfig({ ...base(), targets: { iphone: { platform: "ios" }, duo: { platform: "ios", device: "iPhone Duo" }, desk: { platform: "ios", simulator: "local" } } });
+  const mixed = validateExploreConfig({ ...base(), capture: { simulator: "eas" }, targets: { iphone: { platform: "ios" }, duo: { platform: "ios", device: "iPhone Duo" }, desk: { platform: "ios", simulator: "local" } } });
   const mixedPeers = (id, overrides) => hostedRepackPeers(mixed, withRunOverrides(resolveTargetConfig(mixed, { target: id }), overrides), overrides);
   assert.deepEqual(mixedPeers("duo", { controller: "argent" }), ["iphone", "duo"]);
   assert.deepEqual(mixedPeers("desk", { controller: "argent" }), []);
-  const flat = validateExploreConfig(base());
+  const flat = validateExploreConfig({ ...base(), capture: { simulator: "eas" } });
   assert.deepEqual(hostedRepackPeers(flat, resolveTargetConfig(flat)), ["ios"]);
+  assert.deepEqual(hostedRepackPeers(validateExploreConfig(base()), resolveTargetConfig(validateExploreConfig(base()))), [], "the local default repacks on this machine and shares nothing");
 });
 
 test("a target can choose its own controller and simulator over capture's", () => {

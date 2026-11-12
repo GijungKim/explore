@@ -19,7 +19,7 @@ const baseConfig = {
   navigation: { provider: "expo-router" },
   device: { name: "iPhone 17" },
   exploration: { scope: "all" },
-  capture: { maxMinutes: 30, maxActions: 500 },
+  capture: { maxMinutes: 30, maxActions: 500, simulator: "eas" },
 };
 
 const source = {

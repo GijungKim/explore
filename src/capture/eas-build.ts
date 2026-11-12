@@ -980,7 +980,10 @@ export async function prepareExactSourceBuild(options: {
   easCommand: string;
   repackCommand: string;
   project: string;
-  nativeBuildId: string;
+  /** The Expo Build to repack; absent when `sourceApp` names a build this machine already produced (`eas build --local`). */
+  nativeBuildId?: string | undefined;
+  /** A simulator app (`.app` directory or `.apk`) built on this machine; a local repack consumes it directly, with no download or env pull. */
+  sourceApp?: string | undefined;
   fingerprint: string;
   repackProfile: RepackProfile;
   easEnvironment: NodeJS.ProcessEnv;
@@ -1018,6 +1021,7 @@ export async function prepareExactSourceBuild(options: {
       nextAction: "Select the application's navigation provider in config.yaml and rerun source planning." });
     if ((options.repack ?? "eas") === "eas") {
       if (!options.easProfile) throw new Error("The hosted repack needs the capture build profile name.");
+      if (!options.nativeBuildId) throw new Error("The hosted repack needs an Expo Build; build locally (capture.build: local) to repack a local build instead.");
       const hosted = await prepareHostedRepack({ platform, runner: options.runner, easCommand: options.easCommand, project: options.project,
         nativeBuildId: options.nativeBuildId, fingerprint: options.fingerprint, easProfile: options.easProfile, repackProfile: options.repackProfile,
         easEnvironment: options.easEnvironment, restrictedEnvironment: options.repackEnvironment, provider: providers[0]!,
@@ -1034,74 +1038,91 @@ export async function prepareExactSourceBuild(options: {
         outcome = { buildId: hosted, app: options.keepApp };
       }
     } else {
-      const shadowProject = join(root, "eas-project");
-      const pulledEnvironmentPath = join(root, "server.env");
-      const privateEasEnvironment: NodeJS.ProcessEnv = {
-        ...options.easEnvironment,
-        TMPDIR: root,
-        TMP: root,
-        TEMP: root,
-      };
-      await mkdir(shadowProject, { recursive: true });
-      await Promise.all([
-        writeFile(join(shadowProject, "package.json"), `${JSON.stringify({ private: true })}\n`, { mode: 0o600 }),
-        writeFile(join(shadowProject, "app.json"), `${JSON.stringify({
-          expo: {
-            name: options.repackProfile.projectIdentity.name,
-            slug: options.repackProfile.projectIdentity.slug,
-            ...(options.repackProfile.projectIdentity.owner
-              ? { owner: options.repackProfile.projectIdentity.owner }
-              : {}),
-            extra: { eas: { projectId: options.repackProfile.projectIdentity.projectId } },
-          },
-        })}\n`, { mode: 0o600 }),
-      ]);
-      options.runner({
-        command: options.easCommand,
-        args: [
-          "env:pull",
-          "--environment", options.repackProfile.easEnvironment,
-          "--path", pulledEnvironmentPath,
-          "--non-interactive",
-        ],
-        cwd: shadowProject,
-        environment: options.easEnvironment,
-        timeoutMs: 5 * 60_000,
-      });
-      const pulledInfo = await lstat(pulledEnvironmentPath);
-      if (pulledInfo.isSymbolicLink() || !pulledInfo.isFile()) {
-        throw new Error("eas env:pull did not create a regular environment file");
-      }
       let serverEnvironment: Awaited<ReturnType<typeof pulledEnvironment>> | undefined;
-      try {
-        const parsedEnvironment = await pulledEnvironment({
-          source: await readFile(pulledEnvironmentPath, "utf8"),
-          environment: options.repackProfile.easEnvironment,
-          fileRoot: join(shadowProject, ".eas", ".env"),
-        });
+      let downloadedSource: string | undefined;
+      if (options.sourceApp) {
+        // A build this machine produced (`eas build --local`): nothing is pulled or downloaded from
+        // Expo Services. The bundle environment is the profile's own env from eas.json, applied below.
         for (const [name, value] of Object.entries(options.repackProfile.profileEnvironment)) {
           assertSafeRepackEnvironmentName(name);
           assertSafeRepackEnvironmentValue(name, value);
         }
-        serverEnvironment = parsedEnvironment;
-      } catch (error) {
-        if (!(error instanceof UnsupportedRepackEnvironmentError)) throw error;
-      }
-      if (serverEnvironment === undefined || serverEnvironment.secretNames.length > 0) {
-        outcome = null;
+        serverEnvironment = { values: {}, secretNames: [] };
+        downloadedSource = options.sourceApp;
       } else {
-        const sourceApp = await downloadedAppPath(options.runner({
+        if (!options.nativeBuildId) throw new Error("A local repack of an Expo Build needs its build id; build locally (capture.build: local) to repack a local build instead.");
+        const nativeBuildId = options.nativeBuildId;
+        const shadowProject = join(root, "eas-project");
+        const pulledEnvironmentPath = join(root, "server.env");
+        const privateEasEnvironment: NodeJS.ProcessEnv = {
+          ...options.easEnvironment,
+          TMPDIR: root,
+          TMP: root,
+          TEMP: root,
+        };
+        await mkdir(shadowProject, { recursive: true });
+        await Promise.all([
+          writeFile(join(shadowProject, "package.json"), `${JSON.stringify({ private: true })}\n`, { mode: 0o600 }),
+          writeFile(join(shadowProject, "app.json"), `${JSON.stringify({
+            expo: {
+              name: options.repackProfile.projectIdentity.name,
+              slug: options.repackProfile.projectIdentity.slug,
+              ...(options.repackProfile.projectIdentity.owner
+                ? { owner: options.repackProfile.projectIdentity.owner }
+                : {}),
+              extra: { eas: { projectId: options.repackProfile.projectIdentity.projectId } },
+            },
+          })}\n`, { mode: 0o600 }),
+        ]);
+        options.runner({
           command: options.easCommand,
           args: [
-            "build:download",
-            "--build-id", options.nativeBuildId,
-            "--json",
+            "env:pull",
+            "--environment", options.repackProfile.easEnvironment,
+            "--path", pulledEnvironmentPath,
             "--non-interactive",
           ],
-          cwd: options.project,
-          environment: privateEasEnvironment,
-          timeoutMs: 10 * 60_000,
-        }).stdout, root, platform);
+          cwd: shadowProject,
+          environment: options.easEnvironment,
+          timeoutMs: 5 * 60_000,
+        });
+        const pulledInfo = await lstat(pulledEnvironmentPath);
+        if (pulledInfo.isSymbolicLink() || !pulledInfo.isFile()) {
+          throw new Error("eas env:pull did not create a regular environment file");
+        }
+        try {
+          const parsedEnvironment = await pulledEnvironment({
+            source: await readFile(pulledEnvironmentPath, "utf8"),
+            environment: options.repackProfile.easEnvironment,
+            fileRoot: join(shadowProject, ".eas", ".env"),
+          });
+          for (const [name, value] of Object.entries(options.repackProfile.profileEnvironment)) {
+            assertSafeRepackEnvironmentName(name);
+            assertSafeRepackEnvironmentValue(name, value);
+          }
+          serverEnvironment = parsedEnvironment;
+        } catch (error) {
+          if (!(error instanceof UnsupportedRepackEnvironmentError)) throw error;
+        }
+        if (serverEnvironment !== undefined && serverEnvironment.secretNames.length === 0) {
+          downloadedSource = await downloadedAppPath(options.runner({
+            command: options.easCommand,
+            args: [
+              "build:download",
+              "--build-id", nativeBuildId,
+              "--json",
+              "--non-interactive",
+            ],
+            cwd: options.project,
+            environment: privateEasEnvironment,
+            timeoutMs: 10 * 60_000,
+          }).stdout, root, platform);
+        }
+      }
+      if (serverEnvironment === undefined || serverEnvironment.secretNames.length > 0 || !downloadedSource) {
+        outcome = null;
+      } else {
+        const sourceApp = downloadedSource;
         const repackedApp = join(root, platform === "android" ? "repacked.apk" : "repacked.app");
         let observer: Awaited<ReturnType<typeof prepareCaptureObserver>>;
         try {

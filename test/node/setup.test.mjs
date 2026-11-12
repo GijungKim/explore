@@ -188,8 +188,8 @@ test("setup asks for the mode, a real value for each dynamic route, and how to p
   assert.match(yaml, /# {5}url: test-app:\/\//);
   assert.deepEqual(result.routes.needsParameters, ["/items/[id]"]);
   assert.match(result.nextSteps[0], /coding agent.*explore-setup\/SKILL\.md/s);
-  assert.ok(result.nextSteps.some(step => step.startsWith("gh secret set EXPO_TOKEN")));
-  assert.ok(!result.nextSteps.some(step => step.includes("ANTHROPIC_API_KEY")));
+  assert.ok(!result.nextSteps.some(step => step.includes("gh secret set")), "a local setup needs no repository secrets");
+  assert.ok(result.nextSteps.some(step => step.includes("expo-explore capture")), "the local path ends in a local capture");
 });
 
 test("choosing agent mode for guarded screens asks for the provider and model and drafts instructions from the answers", async (t) => {
@@ -208,10 +208,7 @@ test("choosing agent mode for guarded screens asks for the provider and model an
   assert.match(instructions, /- src\/app\/\(member\)\/_layout\.tsx → \/welcome/);
   assert.match(logs.join("\n"), /platform\.claude\.com\/docs\/en\/about-claude\/models/);
   const steps = result.nextSteps.join("\n");
-  assert.match(steps, /gh secret set ANTHROPIC_API_KEY.*platform\.claude\.com\/settings\/keys.*billed/);
-  assert.match(steps, /ANTHROPIC_WORKSPACE_ID/);
-  assert.match(steps, /gh secret set EXAMPLE_LOGIN/);
-  assert.match(steps, /gh secret set EXAMPLE_PASSWORD/);
+  assert.ok(!steps.includes("gh secret set"), "local agent mode uses the local claude login, not a repository secret");
   assert.match(steps, /expo-explore doctor --check-model/);
 });
 
@@ -228,7 +225,7 @@ test("non-interactive setup takes every answer from flags and installs CI files 
   assert.deepEqual(config.parameters, { "/items/[id]": { id: "item-1" } });
   assert.deepEqual(installs, [[]]);
   assert.ok(!result.nextSteps.some(step => step.includes("setup --workflows")));
-  assert.match(result.nextSteps.join("\n"), /gh secret set OPENAI_API_KEY/);
+  assert.ok(!result.nextSteps.join("\n").includes("gh secret set"), "workflows installed for a local config still need no secrets");
   assert.match(await readFile(join(project, ".expo-explore/instructions.md"), "utf8"), /## Reaching screens/);
 });
 
@@ -239,7 +236,7 @@ test("without source redirects or parameter gaps, setup does not ask about app s
   const result = await runExploreSetup({ project }, interaction, { analyzeRoutes: noGaps });
   assert.ok(!asked.includes("Prepare app state with"));
   assert.ok(!result.nextSteps.some(step => step.includes("coding agent")));
-  assert.match(result.nextSteps.join("\n"), /expo-explore setup --workflows/);
+  assert.match(result.nextSteps.join("\n"), /expo-explore capture/);
 });
 
 test("non-interactive setup uses the wizard defaults and names a missing bundle identifier", async (t) => {
