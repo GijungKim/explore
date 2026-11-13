@@ -4,7 +4,7 @@ import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assertDecodedPng } from "../shared/png-evidence.js";
@@ -27,6 +27,7 @@ import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorS
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
 import { sharedBuild } from "./shared-build.js";
+import { findLocalIosApp } from "./local-ios-app.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
   pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
@@ -639,8 +640,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (options.build === "local") {
       say(options.forceFreshBuild ? "building on this machine with eas build --local (a fresh build was requested)" : "building on this machine with eas build --local");
       const artifactPath = join(dirname(keepApp), localBuildArtifactName(options.platform));
-      blockingCall(timings, options.onBlocking, "native-build", 45 * 60_000,
-        () => eas(localBuildArgs(options.platform, options.easProfile, artifactPath), 45 * 60_000));
+      // A first Release build can compile React Native from source for both simulator architectures.
+      blockingCall(timings, options.onBlocking, "native-build", 90 * 60_000,
+        () => eas(localBuildArgs(options.platform, options.easProfile, artifactPath), 90 * 60_000));
       let sourceApp: string;
       if (options.platform === "android") {
         const info = await lstat(artifactPath);
@@ -652,12 +654,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         const extractDirectory = join(dirname(keepApp), "local-build-app");
         await mkdir(extractDirectory, { recursive: true });
         runner({ command: "tar", args: ["-xzf", artifactPath, "-C", extractDirectory], cwd: project, environment: restrictedEnvironment, timeoutMs: 5 * 60_000 });
-        const entries = await readdir(extractDirectory);
-        const appEntry = entries.find(entry => entry.endsWith(".app"));
-        const payloadApp = appEntry ? undefined : (await readdir(join(extractDirectory, "Payload")).catch((): string[] => [])).find(entry => entry.endsWith(".app"));
-        if (appEntry) sourceApp = join(extractDirectory, appEntry);
-        else if (payloadApp) sourceApp = join(extractDirectory, "Payload", payloadApp);
-        else throw new Error("eas build --local produced an archive with no .app bundle");
+        sourceApp = await findLocalIosApp(extractDirectory, options.bundleId, app => runner({
+          command: "plutil", args: ["-extract", "CFBundleIdentifier", "raw", "-o", "-", join(app, "Info.plist")],
+          cwd: project, environment: restrictedEnvironment, timeoutMs: 30_000,
+        }).stdout.trim());
       }
       say("local build finished; repacking it with the route observer on this machine");
       startSession(); await repacking?.();

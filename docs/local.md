@@ -64,6 +64,10 @@ a capture that uses any `eas` piece again requires `EXPO_TOKEN` (or your
   involved, and a fully local capture never uploads the app or its build.
 - A local review builds each side it captures (no cloud build cache), so the
   first review of a native change takes as long as a local build takes.
+  Local native builds have a 90-minute allowance for a first source build;
+  the screenshot capture budget starts after installation.
+- iOS archives containing a Watch companion are supported: capture selects
+  the application matching the configured bundle ID.
 - The generated GitHub workflows under `templates/` are upstream's CI path
   (Expo Simulators on hosted runners). They are kept for compatibility; this
   fork's supported review path is the local `capture` above, and `doctor`

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
-import { lstat, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { localBuildArgs, localBuildArtifactName } from "../../dist/capture/run.js";
 import { prepareExactSourceBuild } from "../../dist/capture/eas-build.js";
+import { findLocalIosApp } from "../../dist/capture/local-ios-app.js";
 import { writeCaptureObserverPackages } from "../helpers/capture-observer-fixture.mjs";
 
 test("a local build uses the same profile on this machine, with a platform artifact name", () => {
@@ -15,6 +16,53 @@ test("a local build uses the same profile on this machine, with a platform artif
     ["build", "--platform", "ios", "--profile", "explore", "--local", "--output", "/tmp/out.tar.gz", "--non-interactive"]);
   assert.deepEqual(localBuildArgs("android", "explore-apk", "/tmp/out.apk"),
     ["build", "--platform", "android", "--profile", "explore-apk", "--local", "--output", "/tmp/out.apk", "--non-interactive"]);
+});
+
+async function iosArchive(t) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "explore-ios-archive-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bundleIds = new Map();
+  const app = async (relativePath, bundleId) => {
+    const path = join(root, relativePath);
+    await mkdir(path, { recursive: true });
+    bundleIds.set(path, bundleId);
+    return path;
+  };
+  const readBundleId = path => bundleIds.get(path) ?? "";
+  return { app, readBundleId, root };
+}
+
+test("findLocalIosApp selects a flat application bundle", async t => {
+  const archive = await iosArchive(t);
+  const expected = await archive.app("Pulse.app", "com.example.pulse");
+  assert.equal(await findLocalIosApp(archive.root, "com.example.pulse", archive.readBundleId), expected);
+});
+
+test("findLocalIosApp selects the iOS app instead of a nested watch simulator app", async t => {
+  const archive = await iosArchive(t);
+  await archive.app("Build/Products/Release-watchsimulator/PulseLive.app", "com.example.pulse.watch");
+  const expected = await archive.app("Build/Products/Release-iphonesimulator/PulseExplore.app", "com.example.pulse.explore");
+  assert.equal(await findLocalIosApp(archive.root, "com.example.pulse.explore", archive.readBundleId), expected);
+});
+
+test("findLocalIosApp rejects archives without the expected bundle id", async t => {
+  const archive = await iosArchive(t);
+  await archive.app("Release-iphonesimulator/Wrong.app", "com.example.wrong");
+  await assert.rejects(findLocalIosApp(archive.root, "com.example.expected", archive.readBundleId), /no \.app with bundle id com\.example\.expected/);
+});
+
+test("findLocalIosApp rejects ambiguous bundle-id matches", async t => {
+  const archive = await iosArchive(t);
+  await archive.app("One/First.app", "com.example.pulse");
+  await archive.app("Two/Second.app", "com.example.pulse");
+  await assert.rejects(findLocalIosApp(archive.root, "com.example.pulse", archive.readBundleId), /more than one \.app/);
+});
+
+test("findLocalIosApp does not follow symlinked application bundles", async t => {
+  const archive = await iosArchive(t);
+  const expected = await archive.app("Real.app", "com.example.pulse");
+  await symlink(expected, join(archive.root, "Linked.app"));
+  assert.equal(await findLocalIosApp(archive.root, "com.example.pulse", archive.readBundleId), expected);
 });
 
 const route = { id: "screen", provider: "expo-router", kind: "screen", logicalPath: "/(tabs)/cats/[id]",
