@@ -244,7 +244,10 @@ async function fixture(t, settings = {}) {
         return { stdout: listed ?? 'Environment: preview\nNo variables found for this environment.\n', stderr: '' };
       }
       if (command === 'build:list') return json(settings.reuse ? [{ id: settings.reusable ?? 'native-build', ...buildMetadata }] : []);
-      if (command === 'build') return json([{ id: 'built-app', fingerprint: { hash: 'source-fingerprint' }, ...buildMetadata }]);
+      if (command === 'build') {
+        if (request.args.includes('--local')) writeFileSync(value(request, '--output'), apk);
+        return json([{ id: 'built-app', fingerprint: { hash: 'source-fingerprint' }, ...buildMetadata }]);
+      }
       if (command === 'env:pull') { writeFileSync(value(request, '--path'), '# Environment: preview\nEXPO_PUBLIC_ENDPOINT=sample\n'); return { stdout: '', stderr: '' }; }
       if (command === 'build:download') {
         const path = join(request.environment.TMPDIR, settings.android ? 'native.apk' : 'native.app');
@@ -539,6 +542,25 @@ test('source plan captures the configured device without app fixtures or model e
   assert.equal(f.operations().includes('orientation'), false);
   // The only setting a capture touches is the appearance, pinned once per pass: light, since the app declares no style.
   assert.deepEqual(f.requests.filter(request => request.args[0] === 'settings').map(request => request.args.slice(1, 3)), [['appearance', 'light']]);
+});
+
+test('the local EAS build helper override reaches only local EAS builds, never hosted builds or controllers', async t => {
+  const plugin = '/tmp/explore-tooling/eas-cli-local-build-plugin';
+  const local = await fixture(t, { local: true, android: true, repack: 'local', environment: { EAS_LOCAL_BUILD_PLUGIN_PATH: plugin } });
+  await runCiMap({ ...local.options, build: 'local' });
+  const localBuild = local.requests.find(request => request.command === 'fake-eas' && request.args[0] === 'build' && request.args.includes('--local'));
+  assert.equal(localBuild.environment.EAS_LOCAL_BUILD_PLUGIN_PATH, plugin);
+  for (const request of local.requests.filter(request => request.command === 'fake-controller')) {
+    assert.equal(request.environment.EAS_LOCAL_BUILD_PLUGIN_PATH, undefined);
+  }
+
+  const hosted = await fixture(t, { environment: { EAS_LOCAL_BUILD_PLUGIN_PATH: plugin } });
+  await runCiMap(hosted.options);
+  const hostedBuild = hosted.requests.find(request => request.command === 'fake-eas' && request.args[0] === 'build');
+  assert.equal(hostedBuild.environment.EAS_LOCAL_BUILD_PLUGIN_PATH, undefined);
+  for (const request of hosted.requests.filter(request => request.command === 'fake-controller')) {
+    assert.equal(request.environment.EAS_LOCAL_BUILD_PLUGIN_PATH, undefined);
+  }
 });
 
 test('an app that follows the system appearance is captured light then dark, dark as @dark screens', async t => {

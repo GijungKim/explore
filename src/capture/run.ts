@@ -255,7 +255,13 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const controller = options.controller ?? "agent-device";
   const local = options.simulator === "local";
   const restrictedEnvironment = baseEnvironment(sourceEnvironment);
-  const easEnvironment = { ...restrictedEnvironment, ...(options.expoToken ? { EXPO_TOKEN: options.expoToken } : {}) };
+  const easEnvironment: NodeJS.ProcessEnv = { ...restrictedEnvironment };
+  if (options.expoToken) easEnvironment.EXPO_TOKEN = options.expoToken;
+  // EAS supports an already-installed local build helper. Keep this executable
+  // override out of hosted builds and the simulator/controller environment.
+  if (options.build === "local" && sourceEnvironment.EAS_LOCAL_BUILD_PLUGIN_PATH) {
+    easEnvironment.EAS_LOCAL_BUILD_PLUGIN_PATH = sourceEnvironment.EAS_LOCAL_BUILD_PLUGIN_PATH;
+  }
   const assertCheckout = () => {
     const call = (args: string[]) => runner({ command: "git", args, cwd: project, environment: restrictedEnvironment, timeoutMs: 30_000 }).stdout.trim();
     if (call(["rev-parse", "HEAD"]) !== options.gitCommit || call(["status", "--porcelain", "--untracked-files=normal"])) {
