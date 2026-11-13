@@ -27,7 +27,7 @@ import { projectComparePresentation, projectPullRequestPresentation, type Review
 import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "../report/pr-comment-body.js";
 import { upsertStickyComment } from "../report/pr-comment.js";
 import { viewerLinks } from "../report/viewer-links.js";
-import { DEFAULT_EXPLORE_CONFIG_PATH, captureRepack, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, captureBuild, captureRepack, captureUsesExpoServices, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { prepareCiExploration, type PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { generateAgentChangeNotes } from "../capture/agent/change-notes.js";
 import { CiError, environmentSecrets, serializeCiError, toCiError } from "../shared/ci-errors.js";
@@ -79,7 +79,7 @@ function captureOptions(config: ExploreConfig, environment: NodeJS.ProcessEnv, r
     ...(config.app.scheme ? { scheme: config.app.scheme } : {}), device: config.device.name, ...(config.device.pose ? { devicePose: config.device.pose } : {}),
     easProfile: config.app.easProfile, expoToken: environment.EXPO_TOKEN ?? "",
     maxScreens: 5000, maxActions: config.capture.maxActions, maxDurationMinutes: config.capture.maxMinutes,
-    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: captureRepack(config), appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
+    setup: config.setup ?? [], forceFreshBuild: false, confirmExternalRun: true, confirmTrustedSource: true, repack: captureRepack(config), build: captureBuild(config), appearance: config.capture.appearance, launch: config.capture.launch, reset: config.capture.reset, unattributed: config.capture.unattributed, ...(config.capture.readinessSeconds !== undefined ? { readinessSeconds: config.capture.readinessSeconds } : {}), ...(config.capture.controller ? { controller: config.capture.controller } : {}),
     ...(config.capture.simulator ? { simulator: config.capture.simulator } : {}),
     environment, ...(runner ? { runner } : {}), easCommand: packageBin("eas-cli", "eas"), agentDeviceCommand: agentDeviceLauncher(environment), repackCommand: packageBin("@expo/repack-app", "repack-app") };
 }
@@ -549,7 +549,7 @@ export async function runCiReview(options: {
     await assertCurrentHead(); await postComment();
     stage = "preflight"; phases.enter("preflight");
     const active = plan.headCaptureSurfaceIds.length + plan.baseCaptureSurfaceIds.length > 0;
-    if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
+    if (active && !options.useLocalEasSession && captureUsesExpoServices(config)) requireSecret(environment, "EXPO_TOKEN");
     const exploration = await prepareCiExploration(config, projects.head, environment, active,
       { ...(options.agentSessionFactory ? { createSession: options.agentSessionFactory } : {}),
         onUsage: recordAgentUsage(output, () => usagePhase), ...(options.subscription ? { subscription: true } : {}) });
@@ -815,7 +815,7 @@ async function captureBaseline(options: Parameters<typeof runBaselineCi>[0], env
   progress(planSummary(plan, true));
   const active = plan.headCaptureSurfaceIds.length > 0;
   phases.enter("preflight");
-  if (active && !options.useLocalEasSession) requireSecret(environment, "EXPO_TOKEN");
+  if (active && !options.useLocalEasSession && captureUsesExpoServices(options.config)) requireSecret(environment, "EXPO_TOKEN");
   let usagePhase: AgentUsagePhase = "preflight";
   const exploration = await prepareCiExploration(options.config, options.project, environment, active,
     { ...(options.agentSessionFactory ? { createSession: options.agentSessionFactory } : {}),

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { stringify } from "yaml";
-import { DEFAULT_EXPLORE_CONFIG_PATH, readExploreConfig, validateExploreConfig, type ExploreConfig, type ExplorePlatform } from "./explore-config.js";
+import { DEFAULT_EXPLORE_CONFIG_PATH, captureUsesExpoServices, readExploreConfig, validateExploreConfig, type ExploreConfig, type ExplorePlatform } from "./explore-config.js";
 import { explorationSecretNames } from "./exploration-inputs.js";
 import type { RouteEntryReport } from "../ci/route-entry.js";
 import type { CiInstallResult } from "../ci/workflow-install.js";
@@ -442,6 +442,14 @@ export function setupNextSteps(config: ExploreConfig, state: { workflows: boolea
     ? `Write the app-specific part from the app's source (explore-setup skill, step 5): the state each guarded screen needs${config.mode === "agent" ? " in the agent instructions" : " as setup steps"}, and real parameter values. Then run expo-explore doctor.`
     : `Finish the app-specific part with your coding agent (it reads the app's source for sign-in and other flows, parameter values and readiness):\n"${agentSetupPrompt()}"`);
   if (state.unresolvedParameters.length) steps.push(`Or add real values under parameters in ${DEFAULT_EXPLORE_CONFIG_PATH} for: ${state.unresolvedParameters.join(", ")}.`);
+  // This fork captures locally by default: no CI files, repository secrets, or Expo token are part of
+  // the local path. The upstream CI steps return only when a config piece chose Expo Services.
+  if (!captureUsesExpoServices(config)) {
+    steps.push("Commit .expo-explore (nothing else is needed for local capture).");
+    steps.push(`expo-explore doctor${config.mode === "agent" ? " --check-model" : ""}   (checks this machine, the profile, and the routes)`);
+    steps.push("Run expo-explore capture on this machine to review a change; it builds locally and opens the report.");
+    return steps;
+  }
   if (!state.workflows) steps.push("Install the CI files: expo-explore setup --workflows");
   steps.push("Commit .expo-explore and .github, then merge them into the default branch (pull request reviews run the default branch's workflow).");
   steps.push(`gh secret set EXPO_TOKEN   (create the token at ${EXPO_TOKENS_URL})`

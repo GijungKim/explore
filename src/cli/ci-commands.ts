@@ -29,7 +29,7 @@ export async function doctor(): Promise<void> {
   if (has("help")) return help();
   const project = flag("project") ?? process.cwd();
   const report = await runDoctor({ project, online: !has("offline"), github: !has("no-github") && !has("offline"),
-    checkModel: has("check-model"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") });
+    checkModel: has("check-model"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), build: flag("build") });
   if (!has("capture")) {
     if (has("json")) output({ ...report });
     else console.log(formatDoctorReport(report));
@@ -47,10 +47,10 @@ Fix the problems in steps 1–5 before a capture check.`);
     return;
   }
   if (!has("yes")) {
-    if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts an Expo Build and simulator session; pass --yes to confirm.", "yes");
-    reportStatus("blocked", { kind: "question", message: "Start a capture check on Expo Services?" });
+    if (!process.stdin.isTTY || has("json")) argumentError("A capture check starts a build and simulator session; pass --yes to confirm.", "yes");
+    reportStatus("blocked", { kind: "question", message: "Start a capture check?" });
     const terminal = createInterface({ input: process.stdin, output: process.stderr });
-    const answer = await terminal.question(`This builds the app on Expo Services and runs an Expo Simulators session (Expo Services usage applies${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
+    const answer = await terminal.question(`This builds the app and runs a simulator session (on this machine by default in this fork; Expo Services only where config.yaml chose eas${report.mode === "agent" ? "; agent mode also uses your model API key or local claude/codex login" : ""}). Continue? (yes/no) `);
     terminal.close();
     if (!/^(y|yes)$/i.test(answer.trim())) { reportStatus("clear"); return; }
     reportStatus("working");
@@ -58,7 +58,7 @@ Fix the problems in steps 1–5 before a capture check.`);
   let result: Awaited<ReturnType<typeof runCaptureCheck>>;
   try {
     const platform = platformFlag();
-    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
+    result = await runCaptureCheck({ project, ...(platform ? { platform } : {}), target: targetFlag(), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), build: flag("build"), output: resolve(flag("output") ?? await mkdtemp(join(tmpdir(), "expo-explore-capture-"))), progress: stderrProgress() });
   } catch (error) {
     // A refusal before any Expo Services work: show it with its next action next to the static report.
     if (!(error instanceof CiError)) throw error;
@@ -259,7 +259,7 @@ export async function captureReview(): Promise<void> {
   const rawConfig = await readExploreConfig(headProject, configPath);
   // A release comparison's workflow may still pass --expires-in; ci:deploy says once that report.preview.expiresAfter is ignored.
   if (has("expires-in")) warnIgnoredExpiry("--expires-in");
-  const overrides = { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
+  const overrides = { scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), build: flag("build") };
   const config = withRunOverrides(resolveTargetConfig(rawConfig, selection), overrides);
   if (has("pull-request") === has("compare")) argumentError("Pass --pull-request FILE for a pull request, or --compare FILE for any two commits.", has("compare") ? "compare" : "pull-request");
   // A matrix job names its target; its artifacts, report and comment section carry the target's id.
@@ -282,7 +282,7 @@ export async function captureReview(): Promise<void> {
 export async function captureBaseline(): Promise<void> {
   const project = required("project");
   const rawConfig = await readExploreConfig(project, flag("config") ?? DEFAULT_EXPLORE_CONFIG_PATH);
-  const overrides = { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack") };
+  const overrides = { controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), build: flag("build") };
   const config = withRunOverrides(resolveTargetConfig(rawConfig, targetSelection()), overrides);
   const timingsPath = timingsPathFor(process.env);
   try {
@@ -300,7 +300,7 @@ async function localReview(): Promise<void> {
     ...(parallel ? { parallel } : {}),
     // --include-untracked is accepted from before untracked files were included by default.
     committed: has("committed"), uncommitted: has("uncommitted"), ...(platform ? { platform } : {}),
-    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
+    scope: flag("scope"), expiresIn: flag("expires-in"), controller: flag("controller"), simulator: flag("simulator"), repack: flag("repack"), build: flag("build"), cache: !has("no-cache"), configPath: flag("config"), progress: stderrProgress() });
   if (has("output")) {
     for (const report of result.reports) {
       const destination = resolve(required("output"), report.target.id);

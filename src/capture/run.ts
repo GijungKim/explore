@@ -4,7 +4,7 @@ import { type RouteResetSetting } from "./route-reset.js";
 import { defaultReadinessSeconds } from "./readiness.js";
 import { captureLaunch, ffmpegRecordingTools, launchDirectory, type LaunchSetting, type RecordingTools } from "./launch-capture.js";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assertDecodedPng } from "../shared/png-evidence.js";
@@ -70,6 +70,8 @@ export type CiMapOptions = {
   simulator?: "eas" | "local";
   /** Where the route observer is bundled into the app: a hosted Expo Workflows repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
+  /** Where the native app is built: on Expo Services (default), or on this machine with `eas build --local`. */
+  build?: "eas" | "local";
   /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
   buildShare?: string;
   /** The matrix jobs of this GitHub run that repack the same app: they make one hosted repack per commit between them. */
@@ -129,6 +131,16 @@ export function sessionRetryDelayMs(retry: number): number {
   return Math.min(10_000 * 2 ** (retry - 1), 120_000);
 }
 
+/** The file `eas build --local --output` writes for a platform: an APK, or the tarball that wraps a simulator `.app`. */
+export function localBuildArtifactName(platform: "ios" | "android"): string {
+  return platform === "android" ? "local-build.apk" : "local-build.tar.gz";
+}
+
+/** The local-build command: the same profile a cloud build would use, built on this machine instead. */
+export function localBuildArgs(platform: "ios" | "android", easProfile: string, output: string): string[] {
+  return ["build", "--platform", platform, "--profile", easProfile, "--local", "--output", output, "--non-interactive"];
+}
+
 /**
  * Minutes an Expo Simulators session is asked for beyond the capture's own budget. The session starts beside the repack, and the
  * capture deadline only starts once the app is installed, so the session also has to outlast a slow or queued hosted
@@ -169,7 +181,7 @@ function newCaptureMap(options: CiMapOptions, runtime?: ActiveSimulatorRuntime, 
     run: { id: options.buildId, name: options.name, platform: options.platform, controller: options.controller ?? "agent-device", status: "draft",
       bundleId: options.bundleId, ...(runtime ? { deviceId: runtime.controllerDeviceId } : {}),
       createdAt: timestamp, updatedAt: timestamp,
-      build: { id: options.buildId, version: options.buildVersion, gitCommit: options.gitCommit, source: "eas", ...(fingerprint ? { hash: fingerprint } : {}) },
+      build: { id: options.buildId, version: options.buildVersion, gitCommit: options.gitCommit, source: options.build === "local" ? "local" : "eas", ...(fingerprint ? { hash: fingerprint } : {}) },
       environment: runtime ? { deviceModel: runtime.deviceModel, osVersion: runtime.osVersion, locale: runtime.locale,
         orientation: runtime.orientation, colorScheme: runtime.colorScheme } : { deviceModel: options.device },
       limits: { maxScreens: options.maxScreens, maxActions: options.maxActions, maxDurationMinutes: options.maxDurationMinutes } },
@@ -229,7 +241,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const side = options.side ?? (options.gitCommit === plan.headSha ? "head" : options.gitCommit === plan.baseSha ? "base" : undefined);
   if (!side || plan[`${side}Sha`] !== options.gitCommit) throw new Error("Capture commit does not match the selected plan side");
   const selectedIds = plan[`${side}CaptureSurfaceIds`];
-  if (selectedIds.length && !options.useLocalEasSession) nonEmpty(options.expoToken, "expoToken");
+  const fullyLocal = options.build === "local" && options.simulator === "local" && options.repack !== "eas";
+  if (selectedIds.length && !options.useLocalEasSession && !fullyLocal) nonEmpty(options.expoToken, "expoToken");
   const selected = new Set(selectedIds);
   const inventory = plan.surfaces.flatMap(row => {
     const route = row[`${side}Surface`];
@@ -617,6 +630,40 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     say("computing the native fingerprint");
     const fingerprintResult = timings.measure("fingerprint", () => eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]));
     const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
+    if (options.build === "local") {
+      say(options.forceFreshBuild ? "building on this machine with eas build --local (a fresh build was requested)" : "building on this machine with eas build --local");
+      const artifactPath = join(dirname(keepApp), localBuildArtifactName(options.platform));
+      blockingCall(timings, options.onBlocking, "native-build", 45 * 60_000,
+        () => eas(localBuildArgs(options.platform, options.easProfile, artifactPath), 45 * 60_000));
+      let sourceApp: string;
+      if (options.platform === "android") {
+        const info = await lstat(artifactPath);
+        if (info.isSymbolicLink() || !info.isFile()) throw new Error("eas build --local did not produce an Android .apk file at its --output path");
+        sourceApp = artifactPath;
+      } else if ((await lstat(artifactPath)).isDirectory()) {
+        sourceApp = artifactPath;
+      } else {
+        const extractDirectory = join(dirname(keepApp), "local-build-app");
+        await mkdir(extractDirectory, { recursive: true });
+        runner({ command: "tar", args: ["-xzf", artifactPath, "-C", extractDirectory], cwd: project, environment: restrictedEnvironment, timeoutMs: 5 * 60_000 });
+        const entries = await readdir(extractDirectory);
+        const appEntry = entries.find(entry => entry.endsWith(".app"));
+        const payloadApp = appEntry ? undefined : (await readdir(join(extractDirectory, "Payload")).catch((): string[] => [])).find(entry => entry.endsWith(".app"));
+        if (appEntry) sourceApp = join(extractDirectory, appEntry);
+        else if (payloadApp) sourceApp = join(extractDirectory, "Payload", payloadApp);
+        else throw new Error("eas build --local produced an archive with no .app bundle");
+      }
+      say("local build finished; repacking it with the route observer on this machine");
+      startSession(); await repacking?.();
+      const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
+        project, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: "local", easProfile: options.easProfile, sourceApp, keepApp, ...repackWaits(false) });
+      if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
+        message: "The local build cannot be instrumented with the required route observer.",
+        nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
+      const builtApp: BuiltApp = { fingerprint: sourceFingerprint, nativeEasBuildId: null, easBuildId: repacked.buildId, reused: false };
+      if (repacked.app) builtApp.app = repacked.app;
+      return builtApp;
+    }
     const reusable = options.forceFreshBuild || hasEasEnvironmentFetchFailure(configResult.stderr) || hasEasEnvironmentFetchFailure(fingerprintResult.stderr)
       ? undefined : existingBuild(timings.measure("build-lookup", () => eas(["build:list", "--platform", options.platform, "--status", "finished", "--build-profile", options.easProfile,
         "--fingerprint-hash", sourceFingerprint, ...(options.platform === "ios" ? ["--simulator"] : []), "--limit", "20", "--json", "--non-interactive"])).stdout);
@@ -651,7 +698,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     easBuildId = null;
     const built = options.buildShare
       ? await sharedBuild({ directory: options.buildShare, appName, ...(options.signal ? { signal: options.signal } : {}), build: buildApp, owner: options.outputDirectory,
-        key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: options.repack ?? "eas", local,
+        key: { platform: options.platform, easProfile: options.easProfile, bundleId: options.bundleId, gitCommit: options.gitCommit, repack: `${options.build ?? "eas"}:${options.repack ?? "eas"}`, local,
           routes: inventory.map(route => route.id) },
         waiting: () => say("using the build another capture of this run is preparing for this commit"),
         // The session is named before its app exists, so a waiter's session boots while the other capture repacks.

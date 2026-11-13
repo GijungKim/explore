@@ -32,7 +32,7 @@ export async function exploreBinary(): Promise<void> {
   const platform = flag("platform") === undefined ? undefined : oneOf("platform", ["ios", "android"] as const);
   const provider = flag("provider") === undefined ? undefined : oneOf("provider", ["anthropic", "openai"] as const);
   const controller = flag("controller") === undefined ? undefined : oneOf("controller", ["agent-device", "argent"] as const);
-  const simulator = flag("simulator") === undefined ? "eas" : oneOf("simulator", ["eas", "local"] as const);
+  const simulator = flag("simulator") === undefined ? "local" : oneOf("simulator", ["eas", "local"] as const);
   // On Expo Simulators the report is hosted unless --no-upload; locally it opens in the Viewer unless --upload, so a
   // local run needs no Expo account at all.
   const upload = simulator === "local" ? has("upload") : !has("no-upload");

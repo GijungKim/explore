@@ -67,7 +67,7 @@ export async function fixture(t, provider, { docsOnly = false, unresolvedParamet
   const commit = message => { git(headProject, 'add', '.'); git(headProject, 'commit', '-m', message); return git(headProject, 'rev-parse', 'HEAD'); };
   const config = { mode: 'deterministic', app: { name: 'Example', platform, bundleId: 'com.example.app', easProfile: 'capture', scheme: 'sample' },
     device: { name: 'iPhone 17 Pro' }, navigation: { provider, ...(provider === 'react-navigation' ? { entry: 'src/App.tsx' } : {}) },
-    exploration: { scope: 'changes' }, capture: { maxMinutes: 30, maxActions: 500, repack: 'eas', ...(maxSessions ? { maxSessions } : {}) },
+    exploration: { scope: 'changes' }, capture: { maxMinutes: 30, maxActions: 500, repack: 'eas', simulator: 'eas', ...(maxSessions ? { maxSessions } : {}) },
     parameters: provider === 'expo-router' && !unresolvedParameters ? { '/item/[id]': { id: 'example-item' } } : {} };
   if (targets) config.targets = targets;
   if (agentMode) { config.mode = 'agent'; config.agent = { provider: 'anthropic', model: 'fixture-model', instructions: '.expo-explore/instructions.md' }; }
