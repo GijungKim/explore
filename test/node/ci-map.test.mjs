@@ -548,6 +548,10 @@ test('the local EAS build helper override reaches only local EAS builds, never h
   const plugin = '/tmp/explore-tooling/eas-cli-local-build-plugin';
   const local = await fixture(t, { local: true, android: true, repack: 'local', environment: { EAS_LOCAL_BUILD_PLUGIN_PATH: plugin } });
   await runCiMap({ ...local.options, build: 'local' });
+  const localBundle = await readCaptureBundle(local.options.outputDirectory);
+  assert.equal(localBundle.easBuildId, null);
+  assert.deepEqual(Object.keys(localBundle.images).sort(), localBundle.selectedSurfaceIds.toSorted());
+  for (const image of Object.values(localBundle.images)) assert.equal(image.buildId, local.options.buildId);
   const localBuild = local.requests.find(request => request.command === 'fake-eas' && request.args[0] === 'build' && request.args.includes('--local'));
   assert.equal(localBuild.environment.EAS_LOCAL_BUILD_PLUGIN_PATH, plugin);
   for (const request of local.requests.filter(request => request.command === 'fake-controller')) {
