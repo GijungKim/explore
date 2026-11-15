@@ -26,7 +26,7 @@ import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
-import { maxParallelTargets } from "./session-plan.js";
+import { maxParallelTargets, sessionCeiling } from "./session-plan.js";
 
 /**
  * `capture:review --base REF [--head REF]` on a laptop: the same review CI runs (`runCiReview`), on two commits of the
@@ -560,7 +560,7 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
       }
     };
     // Each target needs a simulator session: no more run at once than capture.maxSessions, unless --parallel says.
-    const settled = await settleLimited(targets, options.parallel ?? maxParallelTargets(rawConfig.capture.maxSessions, targets.length),
+    const settled = await settleLimited(targets, options.parallel ?? maxParallelTargets(sessionCeiling(rawConfig.capture), targets.length),
       target => captureTarget(target).catch(async (error: unknown) => { await releaseBuilds(target, error).catch(() => undefined); throw error; }));
     // One target that fails costs that target's report, not the others': they are kept, and the failure is named.
     // Only an interrupted review, or one where every target failed, fails as a whole.

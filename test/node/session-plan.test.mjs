@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { sideAppearancePasses } from "../../dist/ci/pipeline.js";
-import { DEFAULT_MAX_SESSIONS, maxParallelTargets, planSideSessions, sessionShare } from "../../dist/ci/session-plan.js";
+import { DEFAULT_MAX_SESSIONS, localSessionCeiling, maxParallelTargets, planSideSessions, sessionCeiling, sessionShare } from "../../dist/ci/session-plan.js";
 import { validateExploreConfig } from "../../dist/config/explore-config.js";
 
 test("the review-wide session ceiling is divided over the targets, the remainder going to the preferred ones", () => {
@@ -83,4 +83,19 @@ process.stdout.write(JSON.stringify({ appConfig: { userInterfaceStyle: require("
   const lightOnly = join(root, "base"); await mkdir(lightOnly); await writeFile(join(lightOnly, "light-only"), "");
   assert.equal(await sideAppearancePasses(config(2), environment, { ...side, project: lightOnly }), undefined);
   assert.equal(await sideAppearancePasses(config(2), environment, { ...side, easCommand: join(root, "missing-eas") }), undefined, "an unreadable config keeps one session");
+});
+
+test("a local simulator's default ceiling follows the machine's memory; a configured ceiling and Expo Simulators keep theirs", () => {
+  const gib = 1024 ** 3;
+  assert.equal(localSessionCeiling(8 * gib), 1, "never below one");
+  assert.equal(localSessionCeiling(16 * gib), 1);
+  assert.equal(localSessionCeiling(24 * gib), 2);
+  assert.equal(localSessionCeiling(32 * gib), 4);
+  assert.equal(localSessionCeiling(128 * gib), DEFAULT_MAX_SESSIONS, "never above the Expo Simulators default");
+  assert.equal(sessionCeiling({ simulator: "local" }, 16 * gib), 1);
+  assert.equal(sessionCeiling({ simulator: "local", maxSessions: 4 }, 16 * gib), 4, "the config's ceiling wins");
+  assert.equal(sessionCeiling({}, 16 * gib), DEFAULT_MAX_SESSIONS, "Expo Simulators sessions use no local memory");
+  // One session: the sides capture in turn, each keeping its appearances in that one session.
+  assert.equal(sessionShare({ maxSessions: sessionCeiling({ simulator: "local" }, 16 * gib), targets: ["android"], target: "android" }), 1);
+  assert.equal(maxParallelTargets(sessionCeiling({ simulator: "local" }, 16 * gib), 3), 1);
 });

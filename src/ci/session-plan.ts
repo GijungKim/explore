@@ -1,3 +1,5 @@
+import { totalmem } from "node:os";
+
 import type { ColorScheme } from "../capture/appearance.js";
 
 /** One route capture on a remote session, with the bridge thread (observed ~5 s; 9.4 s before it). */
@@ -11,6 +13,35 @@ export const SPLIT_MIN_SAVING_SECONDS = 60;
  * one per platform, so its config sets the ceiling lower (2 for an iOS and an Android target).
  */
 export const DEFAULT_MAX_SESSIONS = 5;
+
+const GIB = 1024 ** 3;
+
+/** Memory kept for the operating system and whatever else the machine is running during a local capture. */
+export const LOCAL_RESERVED_MEMORY_GIB = 8;
+
+/**
+ * Memory one local session needs: an emulator or simulator (about 2-3 GiB resident) and its share of a native release
+ * build (Gradle, its Kotlin daemon and the Metro bundle peak around 4-6 GiB; the sessions of one side share its build).
+ */
+export const LOCAL_SESSION_MEMORY_GIB = 6;
+
+/**
+ * `capture.maxSessions` when the config sets none and the devices run on this machine: as many sessions as its memory
+ * holds after the reserve, at least one and at most DEFAULT_MAX_SESSIONS. 16 GiB runs one (the sides and their
+ * appearances in turn), 24 GiB two, 32 GiB four, 48 GiB five. Total memory, not free memory: macOS keeps most memory in
+ * use as cache, so its free figure says little about what a capture can claim.
+ */
+export function localSessionCeiling(totalMemoryBytes: number): number {
+  const sessions = Math.floor((totalMemoryBytes / GIB - LOCAL_RESERVED_MEMORY_GIB) / LOCAL_SESSION_MEMORY_GIB);
+  return Math.max(1, Math.min(DEFAULT_MAX_SESSIONS, sessions));
+}
+
+/** The review-wide session ceiling: the config's, else the default for where the devices run. */
+export function sessionCeiling(capture: { maxSessions?: number | undefined; simulator?: "local" | undefined },
+  totalMemoryBytes: number = totalmem()): number {
+  if (capture.maxSessions !== undefined) return capture.maxSessions;
+  return capture.simulator === "local" ? localSessionCeiling(totalMemoryBytes) : DEFAULT_MAX_SESSIONS;
+}
 
 export type SessionShareInput = {
   /** `capture.maxSessions`: the review-wide ceiling; absent means DEFAULT_MAX_SESSIONS. */

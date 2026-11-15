@@ -95,8 +95,9 @@ export type ExploreConfig = {
   exploration: { scope: "changes" | "all"; exclude?: string[] };
   capture: { maxMinutes: number; maxActions: number;
     /**
-     * The most Expo Simulators sessions one review may run at once, across its targets and sides; absent:
-     * DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at once, one session each.
+     * The most sessions one review may run at once, across its targets and sides; absent: what this machine's memory holds
+     * with a local simulator (localSessionCeiling), else DEFAULT_MAX_SESSIONS (5). Below the number of targets, that many target jobs run at
+     * once, one session each.
      */
     maxSessions?: number;
     /**

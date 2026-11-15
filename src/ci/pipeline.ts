@@ -11,7 +11,7 @@ import { runCiMap, type CiMapOptions, type CommandRunner } from "../capture/run.
 import type { RepackShare } from "../capture/eas-build.js";
 import { resolveColorSchemes, routeIdOfScreen, type ColorScheme } from "../capture/appearance.js";
 import { baseEnvironment } from "../capture/common.js";
-import { DEFAULT_MAX_SESSIONS, planSideSessions, sessionShare } from "./session-plan.js";
+import { planSideSessions, sessionCeiling, sessionShare } from "./session-plan.js";
 import { mergeCaptureExports, type SecondaryCaptureExport } from "./export-merge.js";
 import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { prepareCaptureReview, readCaptureBundle } from "../review/capture-review.js";
@@ -214,7 +214,7 @@ export async function captureSideInSessions(mapOptions: CiMapOptions, passes: re
 function targetSessionShare(config: ExploreConfig, targets: readonly RunTarget[] | undefined, posedTargets: readonly string[] | undefined): number {
   const targetIds: string[] = (targets ?? []).map(target => target.id);
   if (targetIds.length === 0) targetIds.push(...(config.targets ? Object.keys(config.targets) : [config.target?.id ?? "default"]));
-  return sessionShare({ maxSessions: config.capture.maxSessions, targets: targetIds, target: config.target?.id ?? targetIds[0]!,
+  return sessionShare({ maxSessions: sessionCeiling(config.capture), targets: targetIds, target: config.target?.id ?? targetIds[0]!,
     prefer: id => posedTargets?.includes(id) ? 1 : 0 });
 }
 
@@ -591,7 +591,7 @@ export async function runCiReview(options: {
       sidePasses[side] = await sideAppearancePasses(config, environment, { share, sides: concurrent ? 2 : 1, routes: plan[`${side}CaptureSurfaceIds`].length, project: projects[side] });
     }));
     const split = (["head", "base"] as const).filter(side => sidePasses[side]);
-    progress(`sessions: ${share} of ${config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
+    progress(`sessions: ${share} of ${sessionCeiling(config.capture)} for this target; `
       + (split.length ? `${split.join(" and ")} ${split.length === 1 ? "captures its" : "capture their"} appearances in separate sessions`
         : concurrent ? "one session per side" : "the sides in turn"));
     const captureSide = async (side: "head" | "base", cacheDirectory = environment.EXPLORE_CAPTURE_CACHE) => {
@@ -834,7 +834,7 @@ async function captureBaseline(options: Parameters<typeof runBaselineCi>[0], env
   // Passes on worker threads cannot take an injected runner or an agent session.
   const passes = !options.runner && !exploration.agent
     ? await sideAppearancePasses(options.config, environment, { share, sides: 1, routes: plan.headCaptureSurfaceIds.length, project: options.project }) : undefined;
-  progress(`sessions: ${share} of ${options.config.capture.maxSessions ?? DEFAULT_MAX_SESSIONS} for this target; `
+  progress(`sessions: ${share} of ${sessionCeiling(options.config.capture)} for this target; `
     + (passes ? `capturing ${passes.map(pass => pass.join("+")).join(" and ")} in separate sessions` : "one session"));
   phases.enter("capture");
   const result = await captureSideInSessions(baselineOptions, passes, progress, options.signal, passes !== undefined);

@@ -166,7 +166,8 @@ export type RepackProfile = {
   projectIdentity: {
     name: string;
     slug: string;
-    owner: string;
+    /** Absent when the app config omits `owner`; the project id still identifies the project. */
+    owner?: string;
     projectId: string;
     /** `expo.version` from the resolved app config, when declared. */
     version?: string;
@@ -237,22 +238,20 @@ export function repackProfileFrom(stdout: string): RepackProfile {
   const appConfig = value.appConfig;
   const extra = isRecord(appConfig.extra) ? appConfig.extra : undefined;
   const eas = extra && isRecord(extra.eas) ? extra.eas : undefined;
-  const owner = configValue(appConfig.owner, "Expo Services app owner");
+  const owner = optionalAppText(appConfig.owner, "Expo Services app owner");
   const ios = isRecord(appConfig.ios) ? appConfig.ios : undefined;
   const version = optionalAppText(appConfig.version, "app config version");
   const buildNumber = optionalAppText(ios?.buildNumber, "app config ios.buildNumber");
-  return {
-    easEnvironment,
-    profileEnvironment,
-    projectIdentity: {
-      name: configValue(appConfig.name, "Expo Services app name"),
-      slug: configValue(appConfig.slug, "Expo Services app slug"),
-      owner,
-      projectId: configValue(eas?.projectId, "Expo Services project id"),
-      ...(version ? { version } : {}),
-      ...(buildNumber ? { buildNumber } : {}),
-    },
+  const projectIdentity: RepackProfile["projectIdentity"] = {
+    name: configValue(appConfig.name, "Expo Services app name"),
+    slug: configValue(appConfig.slug, "Expo Services app slug"),
+    projectId: configValue(eas?.projectId, "Expo Services project id"),
   };
+  // A local build needs no owner; an app config without one leaves it out.
+  if (owner) projectIdentity.owner = owner;
+  if (version) projectIdentity.version = version;
+  if (buildNumber) projectIdentity.buildNumber = buildNumber;
+  return { easEnvironment, profileEnvironment, projectIdentity };
 }
 
 const protectedRepackEnvironmentNames = new Set([
