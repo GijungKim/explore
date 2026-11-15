@@ -62,6 +62,10 @@ a capture that uses any `eas` piece again requires `EXPO_TOKEN` (or your
   not consume Expo Build quota. eas-cli itself may still ask for a free
   `eas login` for project configuration on some setups — no paid plan is
   involved, and a fully local capture never uploads the app or its build.
+- A local review sizes its parallelism to this machine's memory when `capture.maxSessions` is unset: it
+  keeps 8 GiB for the system and budgets 6 GiB per session (a device plus its share of a release build), so
+  16 GiB captures one device at a time (head and base, and light and dark, in turn), 24 GiB two, 32 GiB four,
+  and 48 GiB or more five. Set `capture.maxSessions` to choose the number yourself.
 - A local review builds each side it captures (no cloud build cache), so the
   first review of a native change takes as long as a local build takes.
   Local native builds have a 90-minute allowance for a first source build;
