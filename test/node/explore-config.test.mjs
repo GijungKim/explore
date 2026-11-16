@@ -315,7 +315,7 @@ test("capture.build: local with a local simulator, on Expo Services only when a 
   assert.equal(captureBuild(validateExploreConfig({ ...base(), capture: { simulator: "eas" } })), "eas");
   assert.equal(captureBuild(validateExploreConfig({ ...base(), capture: { build: "eas" } })), "eas");
   assert.equal(captureBuild(withRunOverrides(plain, { build: "eas" })), "eas");
-  assert.throws(() => withRunOverrides(plain, { build: "remote" }), /--build must be eas or local/);
+  assert.throws(() => withRunOverrides(plain, { build: "remote" }), /--build must be eas, local or gradle/);
   assert.equal(captureUsesExpoServices(plain), false);
   assert.equal(captureUsesExpoServices(validateExploreConfig({ ...base(), capture: { simulator: "eas" } })), true);
   assert.equal(captureUsesExpoServices(validateExploreConfig({ ...base(), capture: { repack: "eas" } })), true);

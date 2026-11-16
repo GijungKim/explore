@@ -44,6 +44,16 @@ export function baseEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessE
     "JAVA_HOME",
     // A local simulator runs with this Xcode instead of xcode-select's, e.g. one that adds iPhone Duo.
     "DEVELOPER_DIR",
+    // Windows: Gradle, the emulator and npm find the user's profile, app data and cmd.exe through these.
+    "USERPROFILE",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "ComSpec",
+    "ProgramFiles",
+    "ProgramData",
+    "SystemDrive",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
   ]) {
     if (environment[name] !== undefined) result[name] = environment[name];
   }

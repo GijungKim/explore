@@ -25,6 +25,7 @@ import { sweepLocalCaptures } from "../capture/local-registry.js";
 import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
+import { spawnTarget } from "../shared/spawn-target.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { maxParallelTargets, sessionCeiling } from "./session-plan.js";
 
@@ -324,9 +325,11 @@ function stopHint(id: string): string {
  * local login, local simulators by deleting them, and local emulators by killing them.
  */
 export async function stopRecordedSessions(outputs: string[], environment: NodeJS.ProcessEnv, runner: (args: string[]) => { status: number | null } =
-  args => spawnSync(packageBin("eas-cli", "eas"), args, { env: environment, encoding: "utf8", timeout: 120_000 }), quiet = false,
+  args => { const target = spawnTarget(packageBin("eas-cli", "eas"), args);
+    return spawnSync(target.command, target.args, { env: environment, encoding: "utf8", timeout: 120_000, windowsVerbatimArguments: target.windowsVerbatimArguments ?? false }); }, quiet = false,
   simctl: (args: string[]) => { status: number | null } = args => spawnSync("xcrun", ["simctl", ...args], { env: environment, encoding: "utf8", timeout: 120_000 }),
-  adb: (args: string[]) => { status: number | null } = args => spawnSync(androidTools(environment).adb, args, { env: environment, encoding: "utf8", timeout: 60_000 })): Promise<string[]> {
+  adb: (args: string[]) => { status: number | null } = args => { const target = spawnTarget(androidTools(environment).adb, args);
+    return spawnSync(target.command, target.args, { env: environment, encoding: "utf8", timeout: 60_000 }); }): Promise<string[]> {
   const stopped: string[] = [];
   for (const output of outputs) for (const name of sessionStateFiles(output)) {
     const file = join(output, name);
@@ -466,7 +469,9 @@ export async function runLocalReview(options: LocalReviewOptions): Promise<Local
     const needsExpoServices = targets.some(target => captureUsesExpoServices(withRunOverrides(resolveTargetConfig(rawConfig, { target: target.id }), { simulator: options.simulator, repack: options.repack, build: options.build })));
     const useLocalEasSession = !environment.EXPO_TOKEN?.trim();
     if (needsExpoServices && useLocalEasSession && !options.runner) {
-      const whoami = spawnSync(packageBin("eas-cli", "eas"), ["whoami"], { cwd: projects.head, env: environment, encoding: "utf8", timeout: 60_000 });
+      const whoamiTarget = spawnTarget(packageBin("eas-cli", "eas"), ["whoami"]);
+      const whoami = spawnSync(whoamiTarget.command, whoamiTarget.args, { cwd: projects.head, env: environment, encoding: "utf8", timeout: 60_000,
+        windowsVerbatimArguments: whoamiTarget.windowsVerbatimArguments ?? false });
       if (whoami.status !== 0) throw new CiError({ code: "EXPO_LOGIN_REQUIRED", stage: "preflight", message: "You are not logged in to Expo Services.",
         nextAction: "Run eas login (or set EXPO_TOKEN), then rerun." });
     }

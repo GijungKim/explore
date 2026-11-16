@@ -1,12 +1,15 @@
 import { spawnSync, spawn } from "node:child_process";
 import { CiError } from "../shared/ci-errors.js";
+import { spawnTarget } from "../shared/spawn-target.js";
 import { CONTROLLER_SESSION, isRecord, captureError, parseJson } from "./common.js";
 import type { CommandRequest, CommandResult } from "./run.js";
 
 export const MAX_ACCESSIBILITY_EVIDENCE_BYTES = 5 * 1024 * 1024;
 
 export function defaultRunner(request: CommandRequest): CommandResult {
-  const result = spawnSync(request.command, request.args, {
+  const target = spawnTarget(request.command, request.args);
+  const result = spawnSync(target.command, target.args, {
+    windowsVerbatimArguments: target.windowsVerbatimArguments ?? false,
     cwd: request.cwd,
     env: request.environment,
     encoding: "utf8",
@@ -27,11 +30,12 @@ export function commandOutcome(request: CommandRequest, result: { status: number
       ? controllerCommandFailure(result.stdout, request.args[0] ?? "command") : undefined;
     if (structuredFailure) throw structuredFailure;
     const subcommand = typeof request.args[0] === "string" ? ` ${request.args[0]}` : "";
-    const detail = failureDetail(`${result.stderr}\n${result.stdout}`);
-    throw new Error(
+    // Errors are usually on stderr, which a long stdout (a bundler's progress) would otherwise push out of the detail.
+    const detail = failureDetail(`${result.stdout}\n${result.stderr}`);
+    throw Object.assign(new Error(
       `${request.command}${subcommand} exited with status ${result.status ?? "unknown"}`
         + (detail ? `: ${detail}` : ""),
-    );
+    ), { stdout: result.stdout, stderr: result.stderr });
   }
   return { stdout: result.stdout, stderr: result.stderr };
 }
@@ -40,7 +44,9 @@ export function commandOutcome(request: CommandRequest, result: { status: number
 export async function runAgentControllerCommand(request: CommandRequest, signal: AbortSignal): Promise<CommandResult> {
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(request.command, request.args, { cwd: request.cwd, env: request.environment, stdio: ["ignore", "pipe", "pipe"] });
+    const target = spawnTarget(request.command, request.args);
+    const child = spawn(target.command, target.args, { cwd: request.cwd, env: request.environment, stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: target.windowsVerbatimArguments ?? false });
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     let bytes = 0, failure: unknown, kill: ReturnType<typeof setTimeout> | undefined;
     const stop = (error: unknown) => {

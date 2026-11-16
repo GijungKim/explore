@@ -112,7 +112,7 @@ export type ExploreConfig = {
     /** Where the app runs: `local` (the fork default), a simulator Explore creates on this Mac for the run, or Expo Simulators when set to `eas`. */
     simulator?: "local";
     /** Where the native app is built, when the config chooses; captureBuild gives the default. */
-    build?: "eas" | "local" };
+    build?: CaptureBuildMode };
   parameters?: Record<string, Record<string, string>>;
   setup?: ExploreSetupAction[];
   agent?: { provider: "openai" | "anthropic"; model: string; instructions?: string };
@@ -339,7 +339,7 @@ export function validateExploreConfig(value: unknown): ExploreConfig {
   }
   const report = reportConfig(root.report);
   const ci = ciConfig(root.ci);
-  const build = capture.build === undefined ? undefined : literal(capture.build, ["eas", "local"] as const, "capture.build");
+  const build = capture.build === undefined ? undefined : literal(capture.build, ["eas", "local", "gradle"] as const, "capture.build");
   const result: ExploreConfig = {
     mode,
     app: {
@@ -554,7 +554,7 @@ export function withRunOverrides(config: ExploreConfig, overrides: { scope?: str
     result = { ...result, capture: { ...result.capture, repack: overrides.repack } };
   }
   if (overrides.build !== undefined) {
-    if (overrides.build !== "eas" && overrides.build !== "local") fail("--build must be eas or local", "--build");
+    if (overrides.build !== "eas" && overrides.build !== "local" && overrides.build !== "gradle") fail("--build must be eas, local or gradle", "--build");
     result = { ...result, capture: { ...result.capture, build: overrides.build } };
   }
   if (overrides.controller !== undefined) {
@@ -583,12 +583,21 @@ export function captureRepack(config: ExploreConfig): "eas" | "local" {
 }
 
 /**
- * Where a capture builds the native app: the config's choice, else on this machine (`eas build --local`)
- * whenever the app runs on a local simulator, and on Expo Services otherwise. The fork defaults the
- * simulator to local, so an unconfigured capture builds locally too.
+ * How a capture builds the native app: on Expo Services (`eas`), with `eas build --local` (`local`), or with
+ * `expo prebuild` and Gradle on this machine (`gradle`, Android only).
  */
-export function captureBuild(config: ExploreConfig): "eas" | "local" {
-  return config.capture.build ?? (config.capture.simulator === "local" ? "local" : "eas");
+export type CaptureBuildMode = "eas" | "local" | "gradle";
+
+/**
+ * Where a capture builds the native app: the config's choice, else on this machine whenever the app runs on a local
+ * simulator, and on Expo Services otherwise. The fork defaults the simulator to local, so an unconfigured capture builds
+ * locally too. `eas build --local` runs only on macOS and Linux, so on Windows a local Android capture builds with
+ * prebuild and Gradle instead.
+ */
+export function captureBuild(config: ExploreConfig, platform: NodeJS.Platform = process.platform): CaptureBuildMode {
+  if (config.capture.build) return config.capture.build;
+  if (config.capture.simulator !== "local") return "eas";
+  return platform === "win32" && config.app.platform === "android" ? "gradle" : "local";
 }
 
 /** Whether a capture needs Expo Services at all (a cloud build, a hosted repack, or an Expo Simulators session). */

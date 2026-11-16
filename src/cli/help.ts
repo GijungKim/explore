@@ -28,8 +28,9 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
         capture.controller in config.yaml); on Expo Simulators Argent captures one appearance, since it cannot switch it yet;
         --simulator local (the fork default) runs each commit on a simulator (Xcode) or emulator (Android SDK) Explore
-        starts on this machine and removes it afterwards; the app is built on this machine too (eas build --local,
-        --build eas or capture.build in config.yaml builds on Expo Services instead) and repacked with the route
+        starts on this machine and removes it afterwards; the app is built on this machine too (eas build --local, or
+        expo prebuild and Gradle on Windows; --build gradle chooses that anywhere for Android, and --build eas or
+        capture.build in config.yaml builds on Expo Services instead) and repacked with the route
         observer on this machine (--repack eas, or capture.repack, keeps the hosted Expo Workflows job);
         with targets in config.yaml it reviews them at once, up to capture.maxSessions (--parallel N at most N at a time; the targets of a platform
         share each commit's build), --target ID one of them, --platform those of a platform)

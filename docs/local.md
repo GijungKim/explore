@@ -46,7 +46,7 @@ Each seam is a config choice (or the matching `--build` / `--simulator` /
 
 ```yaml
 capture:
-  build: local      # eas build --local (default with a local simulator)
+  build: local      # eas build --local (default with a local simulator; gradle on Windows)
   simulator: local  # a device this machine creates (default)
   repack: local     # repack-app here (default with a local simulator)
 ```
@@ -55,6 +55,20 @@ Set any of them to `eas` to use the upstream Expo Services path for that step;
 a capture that uses any `eas` piece again requires `EXPO_TOKEN` (or your
 `eas login`) exactly as upstream does. Hosted previews (`report.preview`) and
 `--upload` are unchanged and remain opt-in Expo Hosting features.
+
+## Windows
+
+`eas build --local` runs only on macOS and Linux. On Windows a local Android
+capture builds with `build: gradle` by default: `expo prebuild --platform
+android`, then `gradlew :app:assembleRelease` for the emulator's ABI only, with
+the build profile's `env` set as an EAS build would set it. The repack step only
+swaps the JavaScript bundle, so the plain release APK serves as the native shell.
+You can choose `build: gradle` (or `--build gradle`) on macOS and Linux too.
+
+Install the Android SDK with `cmdline-tools`, a system image for the emulator's
+ABI, and CMake 3.31 or newer (`sdkmanager "cmake;3.31.6"`): Explore points the
+build at the newest CMake from 3.31 on, whose ninja handles the long paths a
+checkout under `%TEMP%` produces.
 
 ## Notes and limits
 

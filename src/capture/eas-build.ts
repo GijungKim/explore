@@ -1156,13 +1156,24 @@ export async function prepareExactSourceBuild(options: {
             nextAction: "Install the Android SDK build-tools (sdkmanager \"build-tools;35.0.0\") and export ANDROID_SDK_ROOT; GitHub-hosted runners set it already." });
           repackEnvironment.ANDROID_SDK_ROOT = sdkRoot;
         }
-        options.runner({
-          command: options.repackCommand,
-          args: repackArgs,
-          cwd: options.project,
-          environment: repackEnvironment,
-          timeoutMs: 15 * 60_000,
-        });
+        try {
+          options.runner({
+            command: options.repackCommand,
+            args: repackArgs,
+            cwd: options.project,
+            environment: repackEnvironment,
+            timeoutMs: 15 * 60_000,
+          });
+        } catch (error) {
+          // The error's detail is a few lines; the whole output goes beside the kept app so the failing step can be read.
+          const printed = printedBy(error);
+          if (printed.stdout || printed.stderr) {
+            const log = join(dirname(options.keepApp), "repack.log");
+            await writeFile(log, `$ ${options.repackCommand} ${repackArgs.join(" ")}\n\n--- stdout ---\n${printed.stdout}\n--- stderr ---\n${printed.stderr}\n`, { mode: 0o600 })
+              .then(() => { if (error instanceof Error) error.message += ` (full output: ${log})`; }, () => undefined);
+          }
+          throw error;
+        }
         const repackedInfo = await lstat(repackedApp);
         if (repackedInfo.isSymbolicLink() || (platform === "android" ? !repackedInfo.isFile() : !repackedInfo.isDirectory())) {
           throw new Error(platform === "android" ? "repack-app did not produce a non-symlink Android .apk file" : "repack-app did not produce a non-symlink iOS .app directory");

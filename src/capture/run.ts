@@ -14,7 +14,7 @@ import type { SourceCapturePlan } from "../source/capture-plan.js";
 import { CONTRACT, type ExploreMap, type Platform, type RunStatus } from "../types.js";
 import { ExploreStore, validateMap } from "../map/store.js";
 import { CiError, environmentSecrets, serializeCiError, toCiError } from "../shared/ci-errors.js";
-import type { CaptureSetupAction, DevicePose } from "../config/explore-config.js";
+import type { CaptureBuildMode, CaptureSetupAction, DevicePose } from "../config/explore-config.js";
 import { type CiAgentRuntimeOptions } from "./agent/runtime.js";
 import { EAS_CLI_VERSION, CONTROLLER_SESSION, isRecord, parseJson, baseEnvironment, nonEmpty } from "./common.js";
 import { lstatIfExists, isWithin, temporaryCaptureDirectory, absoluteContractFile, readContractJson, assertNoSymlinkAncestors } from "./fs-safety.js";
@@ -27,6 +27,7 @@ import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, endedOwnSimulatorS
 import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
 import { sharedBuild } from "./shared-build.js";
+import { buildApkWithGradle } from "./gradle-build.js";
 import { findLocalIosApp } from "./local-ios-app.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
@@ -72,7 +73,7 @@ export type CiMapOptions = {
   /** Where the route observer is bundled into the app: a hosted Expo Workflows repack job (default) or repack-app on this machine. */
   repack?: RepackMode;
   /** Where the native app is built: on Expo Services (default), or on this machine with `eas build --local`. */
-  build?: "eas" | "local";
+  build?: CaptureBuildMode;
   /** A folder the review's captures share builds through: targets of one platform, profile and commit build and repack once. */
   buildShare?: string;
   /** The matrix jobs of this GitHub run that repack the same app: they make one hosted repack per commit between them. */
@@ -182,7 +183,7 @@ function newCaptureMap(options: CiMapOptions, runtime?: ActiveSimulatorRuntime, 
     run: { id: options.buildId, name: options.name, platform: options.platform, controller: options.controller ?? "agent-device", status: "draft",
       bundleId: options.bundleId, ...(runtime ? { deviceId: runtime.controllerDeviceId } : {}),
       createdAt: timestamp, updatedAt: timestamp,
-      build: { id: options.buildId, version: options.buildVersion, gitCommit: options.gitCommit, source: options.build === "local" ? "local" : "eas", ...(fingerprint ? { hash: fingerprint } : {}) },
+      build: { id: options.buildId, version: options.buildVersion, gitCommit: options.gitCommit, source: options.build === "local" || options.build === "gradle" ? "local" : "eas", ...(fingerprint ? { hash: fingerprint } : {}) },
       environment: runtime ? { deviceModel: runtime.deviceModel, osVersion: runtime.osVersion, locale: runtime.locale,
         orientation: runtime.orientation, colorScheme: runtime.colorScheme } : { deviceModel: options.device },
       limits: { maxScreens: options.maxScreens, maxActions: options.maxActions, maxDurationMinutes: options.maxDurationMinutes } },
@@ -242,7 +243,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const side = options.side ?? (options.gitCommit === plan.headSha ? "head" : options.gitCommit === plan.baseSha ? "base" : undefined);
   if (!side || plan[`${side}Sha`] !== options.gitCommit) throw new Error("Capture commit does not match the selected plan side");
   const selectedIds = plan[`${side}CaptureSurfaceIds`];
-  const fullyLocal = options.build === "local" && options.simulator === "local" && options.repack !== "eas";
+  const fullyLocal = (options.build === "local" || options.build === "gradle") && options.simulator === "local" && options.repack !== "eas";
   if (selectedIds.length && !options.useLocalEasSession && !fullyLocal) nonEmpty(options.expoToken, "expoToken");
   const selected = new Set(selectedIds);
   const inventory = plan.surfaces.flatMap(row => {
@@ -638,16 +639,27 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     say("computing the native fingerprint");
     const fingerprintResult = timings.measure("fingerprint", () => eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]));
     const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
-    if (options.build === "local") {
-      say(options.forceFreshBuild ? "building on this machine with eas build --local (a fresh build was requested)" : "building on this machine with eas build --local");
+    if (options.build === "local" || options.build === "gradle") {
       const artifactPath = join(dirname(keepApp), localBuildArtifactName(options.platform));
-      // A first Release build can compile React Native from source for both simulator architectures.
-      blockingCall(timings, options.onBlocking, "native-build", 90 * 60_000,
-        () => eas(localBuildArgs(options.platform, options.easProfile, artifactPath), 90 * 60_000));
+      if (options.build === "gradle") {
+        if (options.platform !== "android") throw new CiError({ code: "CAPTURE_BUILD_UNSUPPORTED", stage: "build",
+          message: "capture.build gradle builds Android apps only.", nextAction: "Use capture.build local or eas for iOS." });
+        say("building on this machine with expo prebuild and Gradle");
+        // The profile's variables reach prebuild and Gradle as they reach an EAS build: a config plugin can read them.
+        const buildEnvironment: NodeJS.ProcessEnv = { ...restrictedEnvironment, ...profile.profileEnvironment, NODE_ENV: "production" };
+        const done = options.onBlocking?.("native-build", 90 * 60_000);
+        try { await buildApkWithGradle({ runner, project, environment: buildEnvironment, output: artifactPath }); }
+        finally { done?.(); }
+      } else {
+        say(options.forceFreshBuild ? "building on this machine with eas build --local (a fresh build was requested)" : "building on this machine with eas build --local");
+        // A first Release build can compile React Native from source for both simulator architectures.
+        blockingCall(timings, options.onBlocking, "native-build", 90 * 60_000,
+          () => eas(localBuildArgs(options.platform, options.easProfile, artifactPath), 90 * 60_000));
+      }
       let sourceApp: string;
       if (options.platform === "android") {
         const info = await lstat(artifactPath);
-        if (info.isSymbolicLink() || !info.isFile()) throw new Error("eas build --local did not produce an Android .apk file at its --output path");
+        if (info.isSymbolicLink() || !info.isFile()) throw new Error("The local build did not produce an Android .apk file at its output path");
         sourceApp = artifactPath;
       } else if ((await lstat(artifactPath)).isDirectory()) {
         sourceApp = artifactPath;
