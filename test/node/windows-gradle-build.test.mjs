@@ -110,6 +110,41 @@ test("evidence git is /usr/bin/git on macOS and Linux, and on Windows the git.ex
     { PATH: "C:\\Git", SystemRoot: "C:\\Windows" });
 });
 
+test("on Windows a local emulator's working directory is beside the capture's directory, not in it", async () => {
+  // netsimd, which the first emulator starts and later ones share, keeps that working directory after its emulator
+  // stops; inside the capture's directory it made removing the directory fail with EBUSY while another emulator ran.
+  const { startLocalEmulator } = await import("../../dist/capture/local-simulator.js");
+  const root = await mkdtemp(join(tmpdir(), "explore-win-emulator-cwd-"));
+  try {
+    const sdk = join(root, "sdk");
+    for (const abi of ["x86_64", "arm64-v8a"]) {
+      await mkdir(join(sdk, "system-images", "android-36", "google_apis", abi), { recursive: true });
+      await writeFile(join(sdk, "system-images", "android-36", "google_apis", abi, "system.img"), "");
+    }
+    const environment = { ANDROID_HOME: sdk, EXPLORE_CACHE_DIR: join(root, "cache") };
+    const start = async (platform, side) => {
+      const directory = join(root, "captures", side), requests = [], detached = [];
+      await mkdir(join(directory, "avd", `explore-${side}-0123abcd.avd`), { recursive: true });
+      const runner = request => { requests.push(request); return { stdout: "List of devices attached\n\n", stderr: "" }; };
+      // A capture passes its own directory as the working directory of what it runs.
+      await startLocalEmulator({ runner, device: "pixel_7", name: `explore-${side}-0123abcd`, directory, cwd: directory, environment,
+        platform, startDetached: request => { detached.push(request); return 42; } });
+      return { directory, requests, detached };
+    };
+    const windows = await start("win32", "base");
+    assert.equal(windows.detached.length, 1);
+    assert.equal(windows.detached[0].cwd, join(root, "captures"));
+    assert.equal(windows.detached[0].log, join(windows.directory, "emulator.log"));
+    assert.equal(windows.detached[0].environment.ANDROID_AVD_HOME, join(windows.directory, "avd"));
+    // macOS and Linux still start it from the capture's directory, through /bin/sh.
+    const mac = await start("darwin", "head");
+    assert.equal(mac.detached.length, 0);
+    assert.equal(mac.requests.find(request => request.command === "/bin/sh").cwd, mac.directory);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("on Windows a local emulator starts detached, not through /bin/sh, and a lost one is found with PowerShell", async () => {
   const { deleteLocalEmulator, startLocalEmulator } = await import("../../dist/capture/local-simulator.js");
   const root = await mkdtemp(join(tmpdir(), "explore-win-emulator-"));

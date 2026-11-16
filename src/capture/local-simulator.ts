@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { apkAbis } from "../binary/archive.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { CiError } from "../shared/ci-errors.js";
@@ -265,7 +265,12 @@ export async function startLocalEmulator(options: { runner: CommandRunner; devic
   const emulatorArgs = ["-avd", options.name, "-port", String(port), "-grpc", String(port + 3000), "-grpc-use-token", "-no-window", "-no-audio",
     "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect"];
   const log = join(options.directory, "emulator.log");
-  if ((options.platform ?? process.platform) === "win32") (options.startDetached ?? startDetached)({ command: tools.emulator, args: emulatorArgs, cwd, environment, log });
+  // On Windows the emulator is not started in the capture's directory: the first emulator to start launches netsimd, which
+  // inherits its working directory and serves every emulator started after it, so it runs on after its own emulator
+  // stops, for as long as another capture's emulator does. Windows cannot remove a process's working directory (EBUSY),
+  // so a capture that ended while the other was still running could not remove its own. Beside the directory, it can.
+  if ((options.platform ?? process.platform) === "win32") (options.startDetached ?? startDetached)({ command: tools.emulator, args: emulatorArgs,
+    cwd: dirname(options.directory), environment, log });
   else runner({ command: "/bin/sh", args: ["-c", 'nohup "$0" "$@" > "$EXPLORE_EMULATOR_LOG" 2>&1 &', tools.emulator, ...emulatorArgs],
     cwd, environment: { ...environment, EXPLORE_EMULATOR_LOG: log }, timeoutMs: 30_000 });
   await options.started?.(serial);
