@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
+import { spawnTarget } from "../shared/spawn-target.js";
+
 export type VisualDiffRegion = {
   index: number;
   rect: { x: number; y: number; width: number; height: number };
@@ -133,22 +135,26 @@ export async function diffScreenshots(options: {
     || !isAbsolute(options.command)
     || /[\u0000-\u001f\u007f]/.test(options.command)
   ) throw new Error("agent-device command must be an absolute path");
+  // On Windows the agent-device launcher is a .mjs module with no shebang to execute; spawnTarget
+  // runs it with this Node (and batch files through cmd.exe), and leaves other platforms unchanged.
+  const target = spawnTarget(options.command, [
+    "--json",
+    "diff",
+    "screenshot",
+    "--baseline",
+    baselinePath,
+    currentPath,
+    "--threshold",
+    String(threshold),
+  ]);
   const result = await new Promise<{ error: (Error & { code?: unknown }) | null; stdout: string; stderr: string }>(resolve => {
     execFile(
-      options.command,
-      [
-        "--json",
-        "diff",
-        "screenshot",
-        "--baseline",
-        baselinePath,
-        currentPath,
-        "--threshold",
-        String(threshold),
-      ],
+      target.command,
+      target.args,
       {
         encoding: "utf8",
         shell: false,
+        windowsVerbatimArguments: target.windowsVerbatimArguments ?? false,
         timeout: options.timeoutMs ?? 60_000,
         env: {
           PATH: process.env.PATH,

@@ -65,6 +65,9 @@ test("runs only an explicit absolute agent-device binary with direct diff argume
     /absolute path/,
   );
   assert.doesNotMatch(visualEvidenceSource, /\bnpx\b|npm_config_yes|agent-device@/);
+  // The diff must go through spawnTarget: on Windows the launcher is a .mjs module
+  // that execFile cannot start directly, and other platforms must stay unchanged.
+  assert.match(visualEvidenceSource, /spawnTarget\(options\.command/);
 });
 
 test("requires three stable samples before confirming an impacted visual change", () => {
