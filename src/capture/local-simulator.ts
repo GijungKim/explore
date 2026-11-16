@@ -1,11 +1,12 @@
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { apkAbis } from "../binary/archive.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { CiError } from "../shared/ci-errors.js";
+import { spawnTarget } from "../shared/spawn-target.js";
 import { isRecord, parseJson } from "./common.js";
 import type { CommandRunner } from "./run.js";
 
@@ -198,6 +199,28 @@ export function agentDeviceClaims(options: { runner: CommandRunner; agentDevice:
   return (data?.claims?.length ?? 0) + (data?.hiddenStaleClaims ?? 0) > 0;
 }
 
+/** A program to run in the background, its output appended to `log`. */
+export type DetachedRequest = { command: string; args: string[]; cwd: string; environment: NodeJS.ProcessEnv; log: string };
+
+/**
+ * Starts a program that outlives this call, detached and without a console window, with its output in `log`, and
+ * returns its pid: what `nohup … &` does on macOS and Linux, for Windows.
+ */
+export function startDetached(request: DetachedRequest): number {
+  const target = spawnTarget(request.command, request.args);
+  const output = openSync(request.log, "a");
+  try {
+    const child = spawn(target.command, target.args, { cwd: request.cwd, env: request.environment, detached: true, windowsHide: true,
+      stdio: ["ignore", output, output], windowsVerbatimArguments: target.windowsVerbatimArguments ?? false });
+    child.on("error", () => { /* reported through the log and the wait that follows */ });
+    child.unref();
+    if (!child.pid) throw new Error(`${request.command} could not be started`);
+    return child.pid;
+  } finally {
+    closeSync(output);
+  }
+}
+
 /**
  * Creates an AVD of the configured device profile (such as pixel_7) and starts it without a window. It boots in the
  * background while a capture repacks the app; waitForLocalEmulator waits for it afterwards.
@@ -206,7 +229,9 @@ export async function startLocalEmulator(options: { runner: CommandRunner; devic
   /** Called with the emulator's adb serial once it is starting, so a caller can record it for cleanup. */
   started?: (serial: string) => void | Promise<void>;
   /** Whether the controller still holds a serial (a claim an interrupted run left behind); such a port is skipped. */
-  claimed?: (serial: string) => boolean }): Promise<Omit<LocalEmulator, "osVersion"> & { apiLevel: number }> {
+  claimed?: (serial: string) => boolean;
+  /** Windows has no /bin/sh to put the emulator in the background; it is started detached instead. */
+  platform?: NodeJS.Platform; startDetached?: (request: DetachedRequest) => number }): Promise<Omit<LocalEmulator, "osVersion"> & { apiLevel: number }> {
   const { runner, cwd } = options;
   const tools = androidTools(options.environment);
   const avdHome = join(options.directory, "avd");
@@ -230,9 +255,12 @@ export async function startLocalEmulator(options: { runner: CommandRunner; devic
   const serial = `emulator-${port}`;
   // The emulator runs until the capture kills it; the shell returns as soon as it is started.
   // gRPC (with a token) makes the emulator publish itself in avd/running, where Argent's device server finds it.
-  runner({ command: "/bin/sh", args: ["-c", 'nohup "$0" "$@" > "$EXPLORE_EMULATOR_LOG" 2>&1 &', tools.emulator, "-avd", options.name, "-port", String(port),
-    "-grpc", String(port + 3000), "-grpc-use-token", "-no-window", "-no-audio", "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect"],
-  cwd, environment: { ...environment, EXPLORE_EMULATOR_LOG: join(options.directory, "emulator.log") }, timeoutMs: 30_000 });
+  const emulatorArgs = ["-avd", options.name, "-port", String(port), "-grpc", String(port + 3000), "-grpc-use-token", "-no-window", "-no-audio",
+    "-no-boot-anim", "-no-snapshot", "-gpu", "swiftshader_indirect"];
+  const log = join(options.directory, "emulator.log");
+  if ((options.platform ?? process.platform) === "win32") (options.startDetached ?? startDetached)({ command: tools.emulator, args: emulatorArgs, cwd, environment, log });
+  else runner({ command: "/bin/sh", args: ["-c", 'nohup "$0" "$@" > "$EXPLORE_EMULATOR_LOG" 2>&1 &', tools.emulator, ...emulatorArgs],
+    cwd, environment: { ...environment, EXPLORE_EMULATOR_LOG: log }, timeoutMs: 30_000 });
   await options.started?.(serial);
   return { serial, avd: options.name, avdHome, image, apiLevel };
 }
@@ -326,7 +354,8 @@ export async function reservePort(port: number, environment: NodeJS.ProcessEnv):
 }
 
 /** Stops the emulator and frees its console port; its AVD goes with the capture's directory. */
-export async function deleteLocalEmulator(options: { runner: CommandRunner; serial: string; cwd: string; environment: NodeJS.ProcessEnv }): Promise<void> {
+export async function deleteLocalEmulator(options: { runner: CommandRunner; serial: string; cwd: string; environment: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform }): Promise<void> {
   if (!SERIAL.test(options.serial)) throw new Error("Not an emulator serial");
   const { adb } = androidTools(options.environment);
   // An emulator that already exited (or crashed) is stopped too; only one adb still lists is not.
@@ -340,8 +369,14 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
   // An emulator adb has lost (its console port closed, a child defunct) is not listed and ignores emu kill, yet runs on
   // with its AVD open; its process, by the AVD name and port this capture started it with, is stopped instead.
   const port = Number(options.serial.slice("emulator-".length));
-  const running = () => options.runner({ command: "pgrep", args: ["-f", `qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port ${port} `], cwd: options.cwd,
-    environment: options.environment, timeoutMs: 30_000, allowFailure: true }).stdout.split("\n").map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
+  const pattern = `qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port ${port} `;
+  // Windows has no pgrep; PowerShell lists the processes whose command line matches the same pattern.
+  const query = (options.platform ?? process.platform) === "win32"
+    ? { command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command",
+      `Get-CimInstance Win32_Process -Filter "Name LIKE 'qemu-system%'" | Where-Object { $_.CommandLine -match '${pattern}' } | ForEach-Object { $_.ProcessId }`] }
+    : { command: "pgrep", args: ["-f", pattern] };
+  const running = () => options.runner({ ...query, cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true })
+    .stdout.split("\n").map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
   for (let attempt = 0, pids = running(); pids.length > 0; attempt += 1, pids = running()) {
     if (attempt === 10) throw new Error(`${options.serial} is still running after it was signalled`);
     for (const pid of pids) try { process.kill(pid, attempt < 5 ? "SIGTERM" : "SIGKILL"); } catch { /* it has already exited */ }

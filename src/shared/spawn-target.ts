@@ -14,15 +14,17 @@ export function quoteForCmd(value: string): string {
 
 /**
  * On Windows, a command path without an extension gets the one that exists beside it (an npm bin is `eas.cmd`, the SDK's
- * avdmanager is `avdmanager.bat`, adb is `adb.exe`), and a `.cmd` or `.bat` file runs through cmd.exe, since Node refuses
- * to spawn batch files directly. Every argument is quoted, so paths with spaces stay one argument. Elsewhere the
+ * avdmanager is `avdmanager.bat`, adb is `adb.exe`), a `.cmd` or `.bat` file runs through cmd.exe, since Node refuses
+ * to spawn batch files directly, and a `.js` or `.mjs` file runs with this Node. Every argument is quoted, so paths with spaces stay one argument. Elsewhere the
  * command is unchanged.
  */
 export function spawnTarget(command: string, args: readonly string[], platform: NodeJS.Platform = process.platform,
-  exists: (path: string) => boolean = existsSync, comSpec: string | undefined = process.env.ComSpec): SpawnTarget {
+  exists: (path: string) => boolean = existsSync, comSpec: string | undefined = process.env.ComSpec, nodePath: string = process.execPath): SpawnTarget {
   if (platform !== "win32") return { command, args: [...args] };
   const resolved = /\.[A-Za-z0-9]+$/.test(basename(command)) ? command
     : WINDOWS_EXTENSIONS.map(extension => `${command}${extension}`).find(candidate => exists(candidate)) ?? command;
+  // A JavaScript module (Explore's own controller launcher) runs with this Node: Windows does not read shebangs.
+  if (/\.[cm]?js$/i.test(resolved)) return { command: nodePath, args: [resolved, ...args] };
   if (!/\.(cmd|bat)$/i.test(resolved)) return { command: resolved, args: [...args] };
   const line = [resolved, ...args].map(quoteForCmd).join(" ");
 

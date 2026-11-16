@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { chmod, mkdir, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { safeRelativePath, walkTar } from "../binary/archive.js";
 import { CiError } from "./ci-errors.js";
 import { AGENT_DEVICE_VERSION } from "./agent-device-version.js";
@@ -63,22 +63,31 @@ export function controllerTarballUrl(controller: ControllerName, environment: No
  * then runs it with the same arguments. It names the cache, so a caller that narrows the environment (no HOME) still
  * finds it. Written synchronously, so capture options can name it before any controller call.
  */
-export function agentDeviceLauncher(environment: NodeJS.ProcessEnv = process.env): string {
+export function agentDeviceLauncher(environment: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
   const root = controllerCacheRoot(environment);
   const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
   // The registry is part of the command too: controller calls run with a narrowed environment that drops it.
   const registry = environment.EXPLORE_NPM_REGISTRY ? ` EXPLORE_NPM_REGISTRY=${quote(environment.EXPLORE_NPM_REGISTRY)}` : "";
-  const script = `#!/bin/sh\nEXPLORE_CONTROLLER_CACHE=${quote(root)}${registry} exec ${quote(process.execPath)} ${quote(LAUNCHER)} agent-device "$@"\n`;
+  // Windows runs no shell scripts: there the command is a module, which spawnTarget runs with this Node.
+  const script = platform === "win32" ? windowsAgentDeviceLauncher(root, environment.EXPLORE_NPM_REGISTRY)
+    : `#!/bin/sh\nEXPLORE_CONTROLLER_CACHE=${quote(root)}${registry} exec ${quote(process.execPath)} ${quote(LAUNCHER)} agent-device "$@"\n`;
   // One command per pinned release and installation, so two Explore installs on a machine never swap each other's
   // controller in the middle of a capture.
   const digest = createHash("sha256").update(script).digest("hex").slice(0, 12);
-  const command = join(root, "bin", `agent-device-${CONTROLLER_PACKAGES["agent-device"].version}-${digest}`);
+  const command = join(root, "bin", `agent-device-${CONTROLLER_PACKAGES["agent-device"].version}-${digest}${platform === "win32" ? ".mjs" : ""}`);
   if (existsSync(command) && readFileSync(command, "utf8") === script) return command;
   mkdirSync(dirname(command), { recursive: true, mode: 0o700 });
   const temporary = `${command}.${process.pid}.${randomUUID()}`;
   writeFileSync(temporary, script, { mode: 0o755 });
   renameSync(temporary, command);
   return command;
+}
+
+/** The agent-device command for Windows: a module that names the cache (and registry), then runs the launcher. */
+function windowsAgentDeviceLauncher(root: string, registry: string | undefined): string {
+  return `process.env.EXPLORE_CONTROLLER_CACHE = ${JSON.stringify(root)};\n`
+    + (registry ? `process.env.EXPLORE_NPM_REGISTRY = ${JSON.stringify(registry)};\n` : "")
+    + `process.argv.splice(2, 0, "agent-device");\nawait import(${JSON.stringify(pathToFileURL(LAUNCHER).href)});\n`;
 }
 
 /** A fetch killed mid-download (a timed-out controller call) leaves its staging files; clear any over an hour old. */

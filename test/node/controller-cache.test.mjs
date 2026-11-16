@@ -9,6 +9,7 @@ import test from "node:test";
 import { gzipSync } from "node:zlib";
 import { AGENT_DEVICE_VERSION } from "../../dist/shared/agent-device-version.js";
 import { ARGENT_VERSION } from "../../dist/shared/argent-version.js";
+import { spawnTarget } from "../../dist/shared/spawn-target.js";
 import { CONTROLLER_PACKAGES, agentDeviceLauncher, argentToolServerDirectory, controllerBin, controllerCacheRoot, controllerCached, controllerDirectory, controllerTarballUrl, ensureArgentToolServer, ensureController, npmEnvironment } from "../../dist/shared/controller-cache.js";
 
 /** A gzip tarball of `entries` ({ name, contents?, type?, mode?, link? }), laid out as npm publishes one. */
@@ -113,12 +114,14 @@ test("the agent-device command runs the cached release with the caller's argumen
   await writeFile(join(directory, ".explore-controller.json"), "{}\n");
   const command = agentDeviceLauncher(environment);
   assert.equal(agentDeviceLauncher(environment), command, "the command is stable");
-  assert.match(command, new RegExp(`/bin/agent-device-${AGENT_DEVICE_VERSION}-[0-9a-f]{12}$`), "the command names its release");
+  assert.match(command, new RegExp(`[/\\\\]bin[/\\\\]agent-device-${AGENT_DEVICE_VERSION}-[0-9a-f]{12}${process.platform === "win32" ? "\\.mjs" : ""}$`), "the command names its release");
   const mirrored = agentDeviceLauncher({ ...environment, EXPLORE_NPM_REGISTRY: "https://npm.example.com" });
   assert.notEqual(mirrored, command, "another setup gets a command of its own instead of rewriting this one");
-  assert.match(await readFile(mirrored, "utf8"), /EXPLORE_NPM_REGISTRY='https:\/\/npm\.example\.com'/, "the mirror reaches the narrowed controller environment");
+  assert.match(await readFile(mirrored, "utf8"), /EXPLORE_NPM_REGISTRY( = "|=')https:\/\/npm\.example\.com/, "the mirror reaches the narrowed controller environment");
   // The command names its cache, so a caller that narrows the environment still reaches it.
-  const run = spawnSync(command, ["snapshot", "--json", "--", "-h"], { encoding: "utf8", env: { PATH: process.env.PATH } });
+  // On Windows the command is a module that spawnTarget runs with Node.
+  const target = spawnTarget(command, ["snapshot", "--json", "--", "-h"]);
+  const run = spawnSync(target.command, target.args, { encoding: "utf8", env: { PATH: process.env.PATH } });
   assert.equal(run.status, 0, run.stderr);
   assert.deepEqual(JSON.parse(run.stdout), ["snapshot", "--json", "--", "-h"]);
 });

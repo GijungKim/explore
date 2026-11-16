@@ -26,6 +26,7 @@ import { abandonSharedBuilds } from "../capture/shared-build.js";
 import { exploreCacheRoot } from "../shared/cache-root.js";
 import { packageBin } from "../shared/package-paths.js";
 import { spawnTarget } from "../shared/spawn-target.js";
+import { posixShell } from "../shared/trusted-git.js";
 import { silentProgress, type Progress } from "../shared/progress.js";
 import { maxParallelTargets, sessionCeiling } from "./session-plan.js";
 
@@ -187,7 +188,7 @@ export async function installDependencies(project: string, logFile: string, envi
   if (!layout.manager) throw new CiError({ code: "LOCAL_REVIEW_LOCKFILE_MISSING", stage: "preflight", message: "The app has no lockfile at this commit.",
     nextAction: "Commit the app's lockfile, then rerun." });
   const command = localInstallCommand(layout.manager, layout.installDir);
-  const result = spawnSync("sh", ["-c", command], { cwd: layout.root, env: appEnvironment(environment), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync(posixShell(), ["-c", command], { cwd: layout.root, env: appEnvironment(environment), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   await writeFile(logFile, `$ ${command}\n${result.stdout ?? ""}${result.stderr ?? ""}`);
   if (result.status !== 0) throw new CiError({ code: "LOCAL_REVIEW_INSTALL_FAILED", stage: "preflight", message: `Installing the app's dependencies failed: ${command}`,
     nextAction: `Read ${logFile}; ${layout.manager === "npm" ? "" : `make sure ${layout.manager.replace("-classic", "")} is installed, and `}check the lockfile at that commit. `

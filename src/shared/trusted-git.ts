@@ -31,3 +31,16 @@ export function trustedGitEnvironment(extra: NodeJS.ProcessEnv = {}, platform: N
 
   return { PATH: environment.PATH ?? environment.Path, ...windows, ...extra };
 }
+
+/**
+ * The POSIX shell that runs an app's install command. Windows has none on PATH unless Git Bash put it there, so the
+ * sh.exe that Git for Windows installs beside its git.exe (Git\cmd\git.exe, Git\bin\sh.exe) is used.
+ */
+export function posixShell(platform: NodeJS.Platform = process.platform, path: string | undefined = process.env.PATH ?? process.env.Path,
+  exists: (file: string) => boolean = existsSync): string {
+  if (platform !== "win32") return "sh";
+  const git = trustedGit(platform, path, exists);
+  const shell = win32.join(win32.dirname(win32.dirname(git)), "bin", "sh.exe");
+
+  return win32.isAbsolute(git) && exists(shell) ? shell : "sh";
+}

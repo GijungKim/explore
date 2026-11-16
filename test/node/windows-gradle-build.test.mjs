@@ -7,7 +7,7 @@ import test from "node:test";
 import { captureBuild, validateExploreConfig, withRunOverrides } from "../../dist/config/explore-config.js";
 import { buildApkWithGradle, gradleReleaseArgs, localProperties, preferredWindowsCmake } from "../../dist/capture/gradle-build.js";
 import { quoteForCmd, spawnTarget } from "../../dist/shared/spawn-target.js";
-import { trustedGit, trustedGitEnvironment } from "../../dist/shared/trusted-git.js";
+import { posixShell, trustedGit, trustedGitEnvironment } from "../../dist/shared/trusted-git.js";
 
 const config = (capture = {}, platform = "android") => validateExploreConfig({
   mode: "deterministic",
@@ -50,6 +50,8 @@ test("Windows runs npm shims and SDK batch files through cmd.exe with every argu
   assert.equal(avd.command, "cmd.exe");
   assert.match(avd.args[3], /avdmanager\.bat/);
 
+  assert.deepEqual(spawnTarget("C:\\cache\\bin\\agent-device-1.0.0-abc.mjs", ["open", "{\"a\":1}"], "win32", exists, "cmd.exe", "C:\\node\\node.exe"),
+    { command: "C:\\node\\node.exe", args: ["C:\\cache\\bin\\agent-device-1.0.0-abc.mjs", "open", "{\"a\":1}"] });
   assert.deepEqual(spawnTarget("/usr/bin/eas", ["config"], "darwin", exists), { command: "/usr/bin/eas", args: ["config"] });
   assert.equal(quoteForCmd("say \"hi\""), "\"say \"\"hi\"\"\"");
 });
@@ -104,4 +106,46 @@ test("evidence git is /usr/bin/git on macOS and Linux, and on Windows the git.ex
   assert.deepEqual(trustedGitEnvironment({ A: "1" }, "darwin", { PATH: "/usr/bin", HOME: "/h" }), { PATH: "/usr/bin", A: "1" });
   assert.deepEqual(trustedGitEnvironment({}, "win32", { Path: "C:\\Git", SystemRoot: "C:\\Windows", USERPROFILE: "C:\\u" }),
     { PATH: "C:\\Git", SystemRoot: "C:\\Windows" });
+});
+
+test("on Windows a local emulator starts detached, not through /bin/sh, and a lost one is found with PowerShell", async () => {
+  const { deleteLocalEmulator, startLocalEmulator } = await import("../../dist/capture/local-simulator.js");
+  const root = await mkdtemp(join(tmpdir(), "explore-win-emulator-"));
+  try {
+    const sdk = join(root, "sdk"), directory = join(root, "capture");
+    await mkdir(join(sdk, "system-images", "android-36", "google_apis", "x86_64"), { recursive: true });
+    await writeFile(join(sdk, "system-images", "android-36", "google_apis", "x86_64", "system.img"), "");
+    const environment = { ANDROID_HOME: sdk, EXPLORE_CACHE_DIR: join(root, "cache") };
+    const requests = [], detached = [];
+    const runner = request => {
+      requests.push(request);
+      return { stdout: request.command === "powershell.exe" ? "" : "List of devices attached\r\n\r\n", stderr: "" };
+    };
+    // The AVD avdmanager would create.
+    await mkdir(join(directory, "avd", "explore-head-0123abcd.avd"), { recursive: true });
+    const emulator = await startLocalEmulator({ runner, device: "pixel_7", name: "explore-head-0123abcd", directory, cwd: root, environment,
+      platform: "win32", startDetached: request => { detached.push(request); return 42; } });
+    assert.equal(emulator.serial, "emulator-5554");
+    assert.equal(requests.some(request => request.command === "/bin/sh"), false);
+    assert.equal(detached.length, 1);
+    assert.equal(detached[0].command, join(sdk, "emulator", "emulator"));
+    assert.deepEqual(detached[0].args.slice(0, 4), ["-avd", "explore-head-0123abcd", "-port", "5554"]);
+    assert.equal(detached[0].log, join(directory, "emulator.log"));
+    assert.equal(detached[0].environment.ANDROID_AVD_HOME, join(directory, "avd"));
+
+    await deleteLocalEmulator({ runner, serial: "emulator-5554", cwd: root, environment, platform: "win32" });
+    const query = requests.find(request => request.command === "powershell.exe");
+    assert.match(query.args.at(-1), /Win32_Process/);
+    assert.match(query.args.at(-1), /-port 5554 /);
+    assert.equal(requests.some(request => request.command === "pgrep"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an app's install runs in sh, on Windows the sh.exe of Git for Windows", () => {
+  const exists = path => ["C:\\Git\\cmd\\git.exe", "C:\\Git\\bin\\sh.exe"].includes(path);
+  assert.equal(posixShell("win32", "C:\\Git\\cmd", exists), "C:\\Git\\bin\\sh.exe");
+  assert.equal(posixShell("win32", "C:\\Other", exists), "sh");
+  assert.equal(posixShell("darwin", "/usr/bin"), "sh");
 });
