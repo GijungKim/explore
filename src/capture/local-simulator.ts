@@ -404,6 +404,15 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
   await rm(portLock(port, options.environment), { force: true });
 }
 
+/**
+ * Removes a local emulator capture's directory, its AVD with it. On Windows a process that is still exiting there (an
+ * adb client agent-device started, or the emulator's own) keeps its handles, and its working directory, for a moment,
+ * and removal fails with EBUSY or EPERM until it is gone; rm retries those, for about 15 s in all.
+ */
+export async function removeLocalEmulatorDirectory(directory: string): Promise<void> {
+  await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+}
+
 /** The adb serial a session state file records for a local emulator, or undefined when it names something else. */
 export function localEmulatorFromState(state: string): string | undefined {
   if (!state.startsWith(LOCAL_EMULATOR_STATE_PREFIX)) return undefined;

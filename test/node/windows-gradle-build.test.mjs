@@ -177,6 +177,25 @@ test("on Windows a stopped emulator's watchdog, which holds the capture director
   }
 });
 
+test("a local emulator's directory is removed once a process still exiting there lets go of it", async () => {
+  const { removeLocalEmulatorDirectory } = await import("../../dist/capture/local-simulator.js");
+  const { spawn } = await import("node:child_process");
+  const { existsSync } = await import("node:fs");
+  const directory = await mkdtemp(join(tmpdir(), "explore-emulator-directory-"));
+  await writeFile(join(directory, "emulator.log"), "");
+  // A process working in the directory for a moment, as an adb client agent-device started there does after the emulator
+  // is stopped: on Windows the directory cannot be removed until it exits.
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1500)"], { cwd: directory, stdio: "ignore" });
+  await new Promise(resolve => child.once("spawn", resolve));
+  try {
+    await removeLocalEmulatorDirectory(directory);
+    assert.equal(existsSync(directory), false);
+  } finally {
+    child.kill();
+    await rm(directory, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
 test("an app's install runs in sh, on Windows the sh.exe of Git for Windows", () => {
   const exists = path => ["C:\\Git\\cmd\\git.exe", "C:\\Git\\bin\\sh.exe"].includes(path);
   assert.equal(posixShell("win32", "C:\\Git\\cmd", exists), "C:\\Git\\bin\\sh.exe");

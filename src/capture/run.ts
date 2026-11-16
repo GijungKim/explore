@@ -32,7 +32,7 @@ import { localEasConfig, localFingerprint } from "./local-eas-config.js";
 import { findLocalIosApp } from "./local-ios-app.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
-  pngSize, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
+  pngSize, removeLocalEmulatorDirectory, setLocalEmulatorAppearance, setLocalSimulatorAppearance, startLocalArgentServer, stopLocalAgentDevice, stopLocalArgentServer, type LocalArgentServer } from "./local-simulator.js";
 import { ensureArgentToolServer } from "../shared/controller-cache.js";
 import { openLocalCaptureRecord } from "./local-registry.js";
 import { approveSessionUrlSchemes, simulatorControl, simulatorControlActions, type EasCommand } from "./simulator-control.js";
@@ -558,7 +558,8 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     if (localSimulator) deleteLocalSimulator({ runner, udid: localSimulator, cwd: simulatorProject, environment: restrictedEnvironment });
     if (localEmulator) await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
     if (statePath) await rm(statePath, { force: true });
-    await rm(simulatorProject, { recursive: true, force: true });
+    if (localEmulator) await removeLocalEmulatorDirectory(simulatorProject);
+    else await rm(simulatorProject, { recursive: true, force: true });
     await localRecord?.close();
   };
   const earlyCleanupFailure = (original: unknown, cleanup: unknown) => new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
@@ -1185,7 +1186,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
         await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
         if (statePath) await rm(statePath, { force: true });
         // The AVD lives in the capture's directory, so it goes with it.
-        await rm(simulatorProject, { recursive: true, force: true });
+        await removeLocalEmulatorDirectory(simulatorProject);
       } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
         message: "The local emulator Explore started could not be stopped.", nextAction: `Stop it with: adb -s ${localEmulator} emu kill`,
         details: { serial: localEmulator, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
