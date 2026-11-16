@@ -8,9 +8,13 @@ import type { CommandRunner } from "./run.js";
 /** The release APK Gradle writes for the app module. */
 export const GRADLE_RELEASE_APK = join("app", "build", "outputs", "apk", "release", "app-release.apk");
 
-/** The `gradlew` arguments for a release APK of one ABI: the emulator's, so nothing is compiled for the others. */
+/**
+ * The `gradlew` arguments for a release APK of one ABI: the emulator's, so nothing is compiled for the others. Resource
+ * shrinking is off whatever the app's gradle.properties sets: R8's optimized shrinking drops unused attributes from the
+ * resource table while compiled XML still names them, and the repack's apktool then cannot link the resources again.
+ */
 export function gradleReleaseArgs(abi: string): string[] {
-  return [":app:assembleRelease", `-PreactNativeArchitectures=${abi}`, "--console=plain"];
+  return [":app:assembleRelease", `-PreactNativeArchitectures=${abi}`, "-Pandroid.enableShrinkResourcesInReleaseBuilds=false", "--console=plain"];
 }
 
 /** A path as local.properties reads it: forward slashes, so a Windows path needs no escaping. */

@@ -62,7 +62,9 @@ test("a Windows Gradle build uses the newest SDK CMake from 3.31 on, with forwar
   assert.equal(preferredWindowsCmake(["3.22.1"]), undefined);
   assert.equal(localProperties("C:\\Sdk", "C:\\Sdk\\cmake\\3.31.6"), "sdk.dir=C:/Sdk\ncmake.dir=C:/Sdk/cmake/3.31.6\n");
   assert.equal(localProperties("/opt/sdk", undefined), "sdk.dir=/opt/sdk\n");
-  assert.deepEqual(gradleReleaseArgs("x86_64"), [":app:assembleRelease", "-PreactNativeArchitectures=x86_64", "--console=plain"]);
+  // Resource shrinking leaves compiled XML naming attributes the table no longer has, which the repack cannot relink.
+  assert.deepEqual(gradleReleaseArgs("x86_64"), [":app:assembleRelease", "-PreactNativeArchitectures=x86_64",
+    "-Pandroid.enableShrinkResourcesInReleaseBuilds=false", "--console=plain"]);
 });
 
 test("the Gradle build prebuilds, writes local.properties, builds the emulator ABI and copies the APK", async () => {
@@ -87,7 +89,7 @@ test("the Gradle build prebuilds, writes local.properties, builds the emulator A
 
     assert.deepEqual(calls.map(call => [call.command, call.args, call.cwd]), [
       ["node", [join(project, "node_modules", "expo", "bin", "cli"), "prebuild", "--platform", "android", "--no-install"], project],
-      [join(project, "android", "gradlew.bat"), [":app:assembleRelease", "-PreactNativeArchitectures=x86_64", "--console=plain"], join(project, "android")],
+      [join(project, "android", "gradlew.bat"), gradleReleaseArgs("x86_64"), join(project, "android")],
     ]);
     assert.equal(calls[1].environment.TFT_STORE_BUILD, "1");
     assert.equal(await readFile(join(project, "android", "local.properties"), "utf8"),
