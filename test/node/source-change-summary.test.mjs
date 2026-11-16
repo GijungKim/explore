@@ -8,9 +8,10 @@ import test from "node:test";
 const { tsImport } = await import("tsx/esm/api");
 const { createSourceChangeSummaries, SOURCE_CHANGE_SUMMARY_LIMITS } = await tsImport("../../src/source/change-summary.ts", import.meta.url);
 const { validateSourceChangeSummary } = await tsImport("../../src/contracts/source-change.ts", import.meta.url);
+const { trustedGit } = await tsImport("../../src/shared/trusted-git.ts", import.meta.url);
 
 function git(directory, ...args) {
-  const result = spawnSync("/usr/bin/git", ["-C", directory, "-c", "user.name=Source summary fixture", "-c", "user.email=fixture@example.invalid", ...args], { encoding: "utf8" });
+  const result = spawnSync(trustedGit(), ["-C", directory, "-c", "user.name=Source summary fixture", "-c", "user.email=fixture@example.invalid", ...args], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }

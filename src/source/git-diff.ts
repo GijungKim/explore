@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { trustedGit, trustedGitEnvironment } from "../shared/trusted-git.js";
 import { compareStrings, isRecord, assertAllowedKeys, requiredString, safeRepoPath } from "../contracts/source-validation.js";
 
 type SimpleSourceChange = {
@@ -118,7 +119,7 @@ export function readTwoDotSourceChanges(options: {
   const headSha = fullSha(options.headSha, "headSha");
   if (baseSha === headSha) throw new Error("baseSha and headSha must identify different commits");
   const result = spawnSync(
-    "/usr/bin/git",
+    trustedGit(),
     [
       "-c", "core.hooksPath=/dev/null",
       "-c", "core.fsmonitor=false",
@@ -136,7 +137,7 @@ export function readTwoDotSourceChanges(options: {
       encoding: "buffer",
       timeout: options.timeoutMs ?? 60_000,
       maxBuffer: 4 * 1024 * 1024,
-      env: { PATH: process.env.PATH },
+      env: trustedGitEnvironment(),
     },
   );
   if (result.error) throw new Error(`Could not read two-dot source changes: ${result.error.message}`);

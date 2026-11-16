@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { trustedGit, trustedGitEnvironment } from "../shared/trusted-git.js";
 import ts from "typescript";
 import { parseTwoDotNameStatus, type SourceChange } from "./git-diff.js";
 import type { SourceCapturePlan } from "./capture-plan.js";
@@ -86,10 +87,10 @@ function safePath(path: string): string {
 }
 
 function git(project: string, args: string[], maxBuffer: number, allowTruncation = false): GitResult {
-  const result = spawnSync("/usr/bin/git", ["--literal-pathspecs", "-C", project,
+  const result = spawnSync(trustedGit(), ["--literal-pathspecs", "-C", project,
     "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], {
     encoding: "utf8", maxBuffer, timeout: 15_000,
-    env: { PATH: process.env.PATH, GIT_OPTIONAL_LOCKS: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+    env: trustedGitEnvironment({ GIT_OPTIONAL_LOCKS: "0", GIT_NO_REPLACE_OBJECTS: "1" }),
   });
   if (allowTruncation && (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS") {
     return { stdout: "", truncated: true };

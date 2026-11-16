@@ -7,6 +7,7 @@ import test from "node:test";
 import { captureBuild, validateExploreConfig, withRunOverrides } from "../../dist/config/explore-config.js";
 import { buildApkWithGradle, gradleReleaseArgs, localProperties, preferredWindowsCmake } from "../../dist/capture/gradle-build.js";
 import { quoteForCmd, spawnTarget } from "../../dist/shared/spawn-target.js";
+import { trustedGit, trustedGitEnvironment } from "../../dist/shared/trusted-git.js";
 
 const config = (capture = {}, platform = "android") => validateExploreConfig({
   mode: "deterministic",
@@ -45,7 +46,7 @@ test("Windows runs npm shims and SDK batch files through cmd.exe with every argu
   assert.equal(eas.windowsVerbatimArguments, true);
   assert.deepEqual(eas.args, ["/d", "/s", "/c", "\"\"C:\\p\\node_modules\\.bin\\eas.cmd\" \"config\" \"--profile\" \"my profile\"\""]);
 
-  const avd = spawnTarget("C:\\sdk\\cmdline-tools\\latest\\bin\\avdmanager", ["create"], "win32", exists, undefined);
+  const avd = spawnTarget("C:\\sdk\\cmdline-tools\\latest\\bin\\avdmanager", ["create"], "win32", exists, "");
   assert.equal(avd.command, "cmd.exe");
   assert.match(avd.args[3], /avdmanager\.bat/);
 
@@ -93,4 +94,14 @@ test("the Gradle build prebuilds, writes local.properties, builds the emulator A
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("evidence git is /usr/bin/git on macOS and Linux, and on Windows the git.exe of an absolute PATH entry", () => {
+  assert.equal(trustedGit("darwin", "/opt/bin:/usr/bin"), "/usr/bin/git");
+  const exists = path => path === "C:\\Program Files\\Git\\cmd\\git.exe" || path === "repo\\git.exe";
+  assert.equal(trustedGit("win32", "repo;\"C:\\Program Files\\Git\\cmd\";C:\\Windows", exists), "C:\\Program Files\\Git\\cmd\\git.exe");
+  assert.equal(trustedGit("win32", "repo", exists), "git.exe");
+  assert.deepEqual(trustedGitEnvironment({ A: "1" }, "darwin", { PATH: "/usr/bin", HOME: "/h" }), { PATH: "/usr/bin", A: "1" });
+  assert.deepEqual(trustedGitEnvironment({}, "win32", { Path: "C:\\Git", SystemRoot: "C:\\Windows", USERPROFILE: "C:\\u" }),
+    { PATH: "C:\\Git", SystemRoot: "C:\\Windows" });
 });
