@@ -161,22 +161,29 @@ export function hostEmulatorAbi(arch: string = process.arch): string {
   return arch === "arm64" ? "arm64-v8a" : "x86_64";
 }
 
-/** The newest installed Google APIs system image for this machine's ABI, as `system-images;android-35;google_apis;arm64-v8a`. */
+/**
+ * The newest installed Google APIs system image for this machine's ABI, as `system-images;android-35;google_apis;arm64-v8a`.
+ * A minor SDK release installs as `android-36.1`; it counts as API 36, newer than `android-36`.
+ */
 export async function localSystemImage(sdk: string, abi: string): Promise<{ image: string; apiLevel: number }> {
-  let best: { image: string; apiLevel: number } | undefined;
+  let best: { image: string; apiLevel: number; minor: number } | undefined;
   const platforms = await readdir(join(sdk, "system-images")).catch(() => [] as string[]);
   for (const platform of platforms) {
-    const apiLevel = Number(/^android-(\d+)$/.exec(platform)?.[1]);
-    if (!Number.isInteger(apiLevel)) continue;
+    const version = /^android-(\d+)(?:\.(\d+))?$/.exec(platform);
+    if (!version) continue;
+    const apiLevel = Number(version[1]);
+    const minor = Number(version[2] ?? 0);
     for (const tag of ["google_apis_playstore", "google_apis"]) {
       if (!existsSync(join(sdk, "system-images", platform, tag, abi, "system.img"))) continue;
-      if (!best || apiLevel > best.apiLevel) best = { image: `system-images;${platform};${tag};${abi}`, apiLevel };
+      if (!best || apiLevel > best.apiLevel || (apiLevel === best.apiLevel && minor > best.minor)) {
+        best = { image: `system-images;${platform};${tag};${abi}`, apiLevel, minor };
+      }
     }
   }
   if (!best) throw new CiError({ code: "LOCAL_EMULATOR_IMAGE_UNAVAILABLE", stage: "session",
     message: `The Android SDK at ${sdk} has no Google APIs system image for ${abi}.`,
     nextAction: `Install one, for example: sdkmanager "system-images;android-35;google_apis;${abi}", then rerun.` });
-  return best;
+  return { image: best.image, apiLevel: best.apiLevel };
 }
 
 /** Refuses an APK whose native libraries cannot load on this machine's emulator, before an emulator is started for it. */
