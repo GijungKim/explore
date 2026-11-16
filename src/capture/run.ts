@@ -154,6 +154,12 @@ const SESSION_PREPARATION_MINUTES = 20;
  * Expo Services refuses (before allocating anything) a session longer than the plan allows, naming that maximum. Only that exact
  * rejection is recognized; any other start failure is kept as it is.
  */
+/** " (CODE)" for an error that carries an upper-case code (EBUSY, EPERM, ...): safe to print, unlike its message. */
+function systemErrorCode(error: unknown): string {
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? ` (${code})` : "";
+}
+
 function sessionDurationLimit(error: unknown): number | undefined {
   const match = /max duration must not exceed (\d+(?:\.\d+)?) minutes/i.exec(error instanceof Error ? error.message : String(error));
   return match ? Math.floor(Number(match[1])) : undefined;
@@ -1177,19 +1183,24 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
     argentBridge?.close();
     if (localArgent) stopLocalArgentServer(localArgent);
     if (localEmulator) {
+      // Which part of stopping it failed goes in the message: the cause itself is never printed.
+      let cleanupStep = "closing its controller session";
       try {
         setStage("cleanup");
         say(`stopping the local emulator ${localEmulator}`);
         runner({ command: options.agentDeviceCommand, args: ["close", "--session", CONTROLLER_SESSION, "--json"], cwd: simulatorProject,
           environment: { ...restrictedEnvironment, AGENT_DEVICE_STATE_DIR: join(simulatorProject, "agent-device-state") }, timeoutMs: 60_000, allowFailure: true });
         await stopLocalAgentDevice(join(simulatorProject, "agent-device-state"));
+        cleanupStep = "stopping its process";
         await deleteLocalEmulator({ runner, serial: localEmulator, cwd: simulatorProject, environment: restrictedEnvironment });
+        cleanupStep = "removing its session state";
         if (statePath) await rm(statePath, { force: true });
         // The AVD lives in the capture's directory, so it goes with it.
+        cleanupStep = "removing its directory";
         await removeLocalEmulatorDirectory(simulatorProject);
       } catch (error) { throw new CiError({ code: "SESSION_CLEANUP_FAILED", stage: "cleanup",
-        message: "The local emulator Explore started could not be stopped.", nextAction: `Stop it with: adb -s ${localEmulator} emu kill`,
-        details: { serial: localEmulator, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
+        message: `The local emulator Explore started could not be stopped: ${cleanupStep} failed${systemErrorCode(error)}.`, nextAction: `Stop it with: adb -s ${localEmulator} emu kill`,
+        details: { serial: localEmulator, cleanupStep, ...(primaryError ? { originalFailure: serializeCiError(primaryError, { secrets: [options.expoToken] }) } : {}) }, cause: error }); }
     }
     if (localSimulator) {
       try {

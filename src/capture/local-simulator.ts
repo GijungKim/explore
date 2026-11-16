@@ -393,11 +393,11 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
   const listed = (serial: string) => options.runner({ command: adb, args: ["devices"], cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true })
     .stdout.split("\n").some(line => line.split("\t")[0] === serial && line.includes("device"));
   for (let attempt = 0; listed(options.serial); attempt += 1) {
-    if (attempt === 10) throw new Error(`${options.serial} is still running after emu kill`);
+    if (attempt === 10) throw Object.assign(new Error(`${options.serial} is still running after emu kill`), { code: "EMULATOR_STILL_LISTED" });
     await new Promise(resolve => setTimeout(resolve, 1_000));
   }
   for (let attempt = 0, pids = running(); pids.length > 0; attempt += 1, pids = running()) {
-    if (attempt === 10) throw new Error(`${options.serial} is still running after it was signalled`);
+    if (attempt === 10) throw Object.assign(new Error(`${options.serial} is still running after it was signalled`), { code: "EMULATOR_PROCESS_RUNNING" });
     for (const pid of pids) try { process.kill(pid, attempt < 5 ? "SIGTERM" : "SIGKILL"); } catch { /* it has already exited */ }
     await new Promise(resolve => setTimeout(resolve, 1_000));
   }
