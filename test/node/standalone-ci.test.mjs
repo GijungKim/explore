@@ -17,7 +17,7 @@ const pr = { repositoryId: "123", repository: "expo/explore-playground", number:
 const artifactUrl = "https://github.com/expo/explore-playground/actions/runs/10/artifacts/20";
 const environment = { GITHUB_TOKEN: "test-token", GITHUB_RUN_ID: "10", GITHUB_RUN_ATTEMPT: "1", GITHUB_REPOSITORY: pr.repository };
 
-async function fixture(t, { verified = true } = {}) {
+async function fixture(t, { verified = true, local = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), "explore-artifact-ci-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const files = new Map([["app/index.tsx", "export default function Home() { return null; }"]]);
@@ -29,9 +29,9 @@ async function fixture(t, { verified = true } = {}) {
   for (const side of ["base", "head"]) {
     const directory = join(root, side); await mkdir(directory); await writeFile(join(directory, "home.png"), png);
     await writeFile(join(directory, "bundle.json"), JSON.stringify({ contract: "explore.bundle",
-      side, gitCommit: pr[side].sha, easBuildId: "build", easProjectId: "project", profile: "explore:bundle", selectedSurfaceIds: [id],
+      side, gitCommit: pr[side].sha, easBuildId: local ? null : "build", easProjectId: "project", profile: "explore:bundle", selectedSurfaceIds: [id],
       images: { [id]: { path: "home.png", sha256, width: 1, height: 1, sourceCommit: pr[side].sha,
-        buildId: "build", capturedAt: "2026-09-15T00:00:00Z" } },
+        buildId: local ? `local-run-${side}` : "build", capturedAt: "2026-09-15T00:00:00Z" } },
       outcomes: { [id]: { status: "captured", attempts: 1, landing: verified ? "verified" : "unverified" } } }));
   }
   const prepared = await prepareCaptureReview({ plan, pullRequest: pr, baseDirectory: join(root, "base"),
@@ -57,6 +57,11 @@ test("capture preparation retains PR provenance without delivering internal sour
   assert.equal(input.onboarding, undefined, "reports carry no Live checkout guidance");
   assert.equal(input.assets[0].path, "head/home.png");
   assert.doesNotMatch(JSON.stringify(input), /"sourceChange"/);
+});
+
+test("a fully local capture, with no Expo build, is reviewed under the build id its frames name", async t => {
+  const { prepared } = await fixture(t, { local: true });
+  assert.equal(prepared.review.runtime.buildId, "local-run-head");
 });
 
 test("CI report input strips legacy source payloads from the review and saved comment state", async t => {

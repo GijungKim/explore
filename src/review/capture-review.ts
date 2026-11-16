@@ -307,11 +307,14 @@ async function constructCaptureReview(options: CaptureReviewOptions, store: Scre
   }
   const colorSchemes = bundleColorSchemes(head.bundle);
   const baseColorSchemes = bundleColorSchemes(base.bundle);
+  // A fully local capture has no Expo build: its frames name the capture's own build id, and so does the runtime.
+  const headFrameBuildIds = new Set(Object.values(head.bundle.images).map(image => image.buildId));
+  const runtimeBuildId = head.bundle.easBuildId ?? (headFrameBuildIds.size === 1 ? [...headFrameBuildIds][0] : undefined) ?? "";
   const review: PublicReview = {
     contract: "explore.review", pullRequest: pr, mode: plan.mode, createdAt: new Date(Math.max(...completionTimes)).toISOString(),
     runId: options.runId, runAttempt: options.runAttempt,
     ...(plan.navigation ? { navigation: plan.navigation } : {}),
-    runtime: { projectId: head.bundle.easProjectId ?? "", buildId: head.bundle.easBuildId ?? "", gitCommit: plan.headSha,
+    runtime: { projectId: head.bundle.easProjectId ?? "", buildId: runtimeBuildId, gitCommit: plan.headSha,
       platform: head.bundle.platform ?? "ios", ...(head.bundle.controller === "argent" ? { controller: "argent" as const } : {}), statusBarBandPercent: statusBarBandPercent(head.bundle.platform),
       ...(homeIndicatorBandPercent(head.bundle.platform) > 0 ? { homeIndicatorBandPercent: homeIndicatorBandPercent(head.bundle.platform) } : {}),
       systemRegions: (options.systemRegions ?? systemRegions({ platform: head.bundle.platform })).map((area) => ({ ...area })),
