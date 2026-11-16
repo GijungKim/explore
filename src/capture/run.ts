@@ -28,6 +28,7 @@ import { argentControllerInvocation } from "./controller-invocation.js";
 import { startArgentBridgeRunner, type ArgentBridgeRunner } from "./argent-bridge-host.js";
 import { sharedBuild } from "./shared-build.js";
 import { buildApkWithGradle } from "./gradle-build.js";
+import { localEasConfig, localFingerprint } from "./local-eas-config.js";
 import { findLocalIosApp } from "./local-ios-app.js";
 import { LOCAL_EMULATOR_STATE_PREFIX, LOCAL_SIMULATOR_STATE_PREFIX, agentDeviceClaims, assertLocalEmulatorCompatible, createLocalSimulator, startLocalEmulator, waitForLocalEmulator, waitForLocalSimulator, deleteLocalEmulator,
   deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, approveLinkScheme, localPoseShown,
@@ -497,7 +498,10 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const controlOptions = { sleep: options.sleep };
   // What the Expo Simulators session's host can do through simulator:control (iOS sessions on serve-sim 0.10.0 or later).
   let controlActions = new Set<string>();
-  const configResult = timings.measure("configuration", () => eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]));
+  // A capture that uses no Expo Services step reads eas.json and the app config itself, so it needs no Expo account.
+  const configResult = fullyLocal
+    ? await localEasConfig({ runner, project, platform: options.platform, profile: options.easProfile, environment: restrictedEnvironment })
+    : timings.measure("configuration", () => eas(["config", "--platform", options.platform, "--profile", options.easProfile, "--json", "--non-interactive"]));
   const profile = repackProfileFrom(configResult.stdout);
   const configValue = parseJson(configResult.stdout, "eas config") as { appConfig: Record<string, unknown>; buildProfile: Record<string, unknown> };
   scheme ??= appScheme(configValue.appConfig.scheme);
@@ -637,7 +641,9 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const buildApp = async (keepApp: string, repacking?: () => Promise<void>): Promise<BuiltApp> => {
     options.signal?.throwIfAborted();
     say("computing the native fingerprint");
-    const fingerprintResult = timings.measure("fingerprint", () => eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]));
+    const fingerprintResult = timings.measure("fingerprint", () => fullyLocal
+      ? localFingerprint({ runner, project, platform: options.platform, environment: restrictedEnvironment })
+      : eas(["fingerprint:generate", "--platform", options.platform, "--build-profile", options.easProfile, "--json", "--non-interactive"]));
     const sourceFingerprint = fingerprintFrom(fingerprintResult.stdout);
     if (options.build === "local" || options.build === "gradle") {
       const artifactPath = join(dirname(keepApp), localBuildArtifactName(options.platform));

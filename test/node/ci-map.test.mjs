@@ -118,6 +118,12 @@ async function fixture(t, settings = {}) {
   await writeCaptureObserverPackages(project);
   await writeFile(join(project, 'package.json'), '{"name":"example","main":"index.js"}\n');
   await writeFile(join(project, 'app.json'), JSON.stringify({ expo: { name: 'Example', slug: 'example' } }));
+  // The project's own @expo/fingerprint, which a fully local capture runs instead of eas fingerprint:generate.
+  await mkdir(join(project, 'node_modules', '@expo', 'fingerprint', 'bin'), { recursive: true });
+  await writeFile(join(project, 'node_modules', '@expo', 'fingerprint', 'bin', 'cli.js'), '');
+  // The capture profile as eas.json declares it, which a fully local capture reads instead of eas config.
+  await writeFile(join(project, 'eas.json'), JSON.stringify({ build: { capture: { distribution: 'internal', environment: 'preview',
+    android: { buildType: 'apk' }, ios: { simulator: settings.simulator !== false } } } }));
   const routes = settings.routes ?? [route('home'), route('settings')];
   const files = new Map(routes.map(item => [item.routeFile, 'export default function Screen(){return null;}']));
   const plan = createSourceCapturePlan({ baseSha: SHA, headSha: HEAD, baseFiles: files, headFiles: files,
@@ -145,9 +151,14 @@ async function fixture(t, settings = {}) {
     device: { id: deviceId, name: openedName, platform, target: 'mobile',
       locale: 'en-US', orientation: 'portrait', colorScheme: 'light' },
     identifiers: { session: 'expo-explore-runtime', appBundleId: 'com.example.app', deviceId, deviceName: openedName } });
+  const appConfig = () => ({ name: 'Example', slug: 'example', owner: 'acme', ...(settings.userInterfaceStyle ? { userInterfaceStyle: settings.userInterfaceStyle } : {}), scheme: settings.noScheme ? undefined : 'sample',
+    ...(settings.android ? { android: { package: 'com.example.app' } } : { ios: { bundleIdentifier: 'com.example.app' } }), extra: { eas: { projectId: PROJECT_ID } } });
   const runner = request => {
     requests.push(request);
     const command = request.args[0];
+    // A fully local capture reads the app config with expo config and the fingerprint with @expo/fingerprint, through Node.
+    if (request.command === process.execPath && request.args[1] === 'config') return json(appConfig());
+    if (request.command === process.execPath && request.args[1] === 'fingerprint:generate') return json({ hash: 'source-fingerprint' });
     if (request.command === 'git') {
       if (command === 'ls-files') return { stdout: readdirSync(project, { recursive: true, withFileTypes: true })
         .filter(entry => entry.isFile() && !relative(project, entry.parentPath).split(sep).includes('node_modules'))
@@ -203,8 +214,7 @@ async function fixture(t, settings = {}) {
     }
     if (request.command === 'fake-eas') {
       if (command === 'config') return json({ buildProfile: { ...(settings.android ? { buildType: 'apk' } : { simulator: settings.simulator !== false }), distribution: 'internal', environment: 'preview', env: {} },
-        appConfig: { name: 'Example', slug: 'example', owner: 'acme', ...(settings.userInterfaceStyle ? { userInterfaceStyle: settings.userInterfaceStyle } : {}), scheme: settings.noScheme ? undefined : 'sample',
-          ...(settings.android ? { android: { package: 'com.example.app' } } : { ios: { bundleIdentifier: 'com.example.app' } }), extra: { eas: { projectId: PROJECT_ID } } } });
+        appConfig: appConfig() });
       if (command === 'simulator:availability') return json({ available: settings.available !== false });
       // controlActions: what the session's serve-sim offers through simulator:control (none unless a test names them).
       if (command === 'simulator:control') {

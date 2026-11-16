@@ -113,8 +113,11 @@ test("on Windows a local emulator starts detached, not through /bin/sh, and a lo
   const root = await mkdtemp(join(tmpdir(), "explore-win-emulator-"));
   try {
     const sdk = join(root, "sdk"), directory = join(root, "capture");
-    await mkdir(join(sdk, "system-images", "android-36", "google_apis", "x86_64"), { recursive: true });
-    await writeFile(join(sdk, "system-images", "android-36", "google_apis", "x86_64", "system.img"), "");
+    // Both ABIs, so the test runs on an Apple silicon Mac as well as an x86_64 PC.
+    for (const abi of ["x86_64", "arm64-v8a"]) {
+      await mkdir(join(sdk, "system-images", "android-36", "google_apis", abi), { recursive: true });
+      await writeFile(join(sdk, "system-images", "android-36", "google_apis", abi, "system.img"), "");
+    }
     const environment = { ANDROID_HOME: sdk, EXPLORE_CACHE_DIR: join(root, "cache") };
     const requests = [], detached = [];
     const runner = request => {
@@ -148,4 +151,30 @@ test("an app's install runs in sh, on Windows the sh.exe of Git for Windows", ()
   assert.equal(posixShell("win32", "C:\\Git\\cmd", exists), "C:\\Git\\bin\\sh.exe");
   assert.equal(posixShell("win32", "C:\\Other", exists), "sh");
   assert.equal(posixShell("darwin", "/usr/bin"), "sh");
+});
+
+test("a fully local capture resolves the eas.json build profile the way eas config does", async () => {
+  const { resolveBuildProfile } = await import("../../dist/capture/local-eas-config.js");
+  const easJson = { build: {
+    production: { node: "26.13.0", channel: "production", env: { TFT_STORE_BUILD: "1", SHARED: "base" } },
+    preview: { extends: "production", channel: "preview", distribution: "internal", ios: { simulator: true }, android: { buildType: "apk", env: { SHARED: "android" } } },
+    loop: { extends: "loop" },
+  } };
+  assert.deepEqual(resolveBuildProfile(easJson, "preview", "android"),
+    { node: "26.13.0", channel: "preview", distribution: "internal", buildType: "apk", env: { TFT_STORE_BUILD: "1", SHARED: "android" } });
+  assert.deepEqual(resolveBuildProfile(easJson, "preview", "ios"),
+    { node: "26.13.0", channel: "preview", distribution: "internal", simulator: true, env: { TFT_STORE_BUILD: "1", SHARED: "base" } });
+  assert.throws(() => resolveBuildProfile(easJson, "missing", "android"), /no build profile named missing/);
+  assert.throws(() => resolveBuildProfile(easJson, "loop", "android"), /extends itself/);
+});
+
+test("a fully local capture reads the fingerprint with the project's @expo/fingerprint", async () => {
+  const { localFingerprint } = await import("../../dist/capture/local-eas-config.js");
+  const calls = [];
+  const nested = join("/app", "node_modules", "expo", "node_modules", "@expo", "fingerprint", "bin", "cli.js");
+  localFingerprint({ runner: request => { calls.push(request); return { stdout: "{\"hash\":\"abc\"}", stderr: "" }; },
+    project: "/app", platform: "android", environment: {}, nodePath: "node", exists: path => path === nested });
+  assert.deepEqual(calls[0].args, [nested, "fingerprint:generate", "--platform", "android"]);
+  assert.throws(() => localFingerprint({ runner: () => ({ stdout: "", stderr: "" }), project: "/app", platform: "android", environment: {}, exists: () => false }),
+    /no installed @expo\/fingerprint/);
 });

@@ -27,6 +27,8 @@ import { projectComparePresentation, projectPullRequestPresentation, type Review
 import { renderPublicComment, platformSectionMerge, type PublicCommentState } from "../report/pr-comment-body.js";
 import { upsertStickyComment } from "../report/pr-comment.js";
 import { viewerLinks } from "../report/viewer-links.js";
+import { defaultRunner } from "../capture/controller.js";
+import { readLocalEasConfig } from "../capture/local-eas-config.js";
 import { DEFAULT_EXPLORE_CONFIG_PATH, captureBuild, captureRepack, captureUsesExpoServices, type ExploreConfig, type ExplorePlatform } from "../config/explore-config.js";
 import { prepareCiExploration, type PrepareCiExplorationOptions } from "../capture/agent/exploration.js";
 import { generateAgentChangeNotes } from "../capture/agent/change-notes.js";
@@ -120,6 +122,15 @@ async function expectedColorSchemes(config: ExploreConfig, project: string, envi
   if (config.capture.controller === "argent" && config.capture.simulator !== "local" && config.app.platform !== "ios") return undefined;
   if (config.capture.appearance !== "auto") return resolveColorSchemes(config.capture.appearance, undefined, config.app.platform);
   const easEnvironment = { ...baseEnvironment(environment), ...(environment.EXPO_TOKEN ? { EXPO_TOKEN: environment.EXPO_TOKEN } : {}) };
+  if (!captureUsesExpoServices(config)) {
+    try {
+      const { appConfig } = await readLocalEasConfig({ runner: defaultRunner, project, platform: config.app.platform, profile: config.app.easProfile,
+        environment: baseEnvironment(environment) });
+      return resolveColorSchemes("auto", appConfig, config.app.platform);
+    } catch {
+      return undefined;
+    }
+  }
   try {
     const { stdout } = await execFileAsync(easCommand, ["config", "--platform", config.app.platform, "--profile", config.app.easProfile, "--json", "--non-interactive"],
       { cwd: project, env: easEnvironment, timeout: 5 * 60_000, maxBuffer: 16 * 1024 * 1024 });

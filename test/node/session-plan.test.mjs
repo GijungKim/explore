@@ -64,7 +64,8 @@ process.stdout.write(JSON.stringify({ appConfig: { userInterfaceStyle: require("
   await chmod(eas, 0o755);
   const calls = async () => (await readFile(join(root, "calls"), "utf8").catch(() => "")).split("\n").filter(Boolean).map(line => JSON.parse(line));
   const config = maxSessions => validateExploreConfig({ app: { bundleId: "com.example.app", easProfile: "explore" }, device: { name: "iPhone 17" },
-    ...(maxSessions === undefined ? {} : { capture: { maxSessions } }) });
+    // A cloud build reads the appearance through eas config; a fully local capture reads eas.json and expo config itself.
+    capture: { build: "eas", ...(maxSessions === undefined ? {} : { maxSessions }) } });
   const environment = { PATH: process.env.PATH, HOME: process.env.HOME, EXPO_TOKEN: "expo-token", GITHUB_TOKEN: "github-token", ANTHROPIC_API_KEY: "agent-key" };
   const side = { share: 2, sides: 1, routes: 16, project: root, easCommand: eas };
   assert.equal(await sideAppearancePasses(config(8), environment, { ...side, routes: 3 }), undefined, "three routes would save under a minute");
