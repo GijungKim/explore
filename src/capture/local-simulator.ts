@@ -365,6 +365,29 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
   platform?: NodeJS.Platform }): Promise<void> {
   if (!SERIAL.test(options.serial)) throw new Error("Not an emulator serial");
   const { adb } = androidTools(options.environment);
+  // An emulator adb has lost (its console port closed, a child defunct) is not listed and ignores emu kill, yet runs on
+  // with its AVD open; its process, by the AVD name and port this capture started it with, is stopped instead.
+  const port = Number(options.serial.slice("emulator-".length));
+  const avdAndPort = ` -avd explore-[a-z]+-[0-9a-f]{8} -port ${port} `;
+  // Windows has no pgrep; PowerShell lists the processes whose command line matches. There, the processes started in the
+  // capture's directory outlive qemu and keep the directory from being removed: emulator.exe, through up to 20 s of
+  // graceful shutdown, and the watchdog it starts on emu kill (`emulator -kill <qemu pid> -sleep 20`). Both are stopped
+  // with qemu: the watchdog by the pid of a qemu or emulator.exe seen here, since its command line names no AVD. A booted
+  // emulator's qemu exits soon after emu kill, so on Windows its pid is read before.
+  const windows = (options.platform ?? process.platform) === "win32";
+  const seen = new Set<number>();
+  const query = () => windows
+    ? { command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command",
+      `Get-CimInstance Win32_Process -Filter "Name LIKE 'qemu-system%' OR Name = 'emulator.exe'" | Where-Object { $_.CommandLine -match '(?:qemu-system|emulator)[^ ]*${avdAndPort}'${
+        seen.size ? ` -or $_.CommandLine -match ' -kill (?:${[...seen].join("|")}) -sleep '` : ""} } | ForEach-Object { $_.ProcessId }`] }
+    : { command: "pgrep", args: ["-f", `qemu-system.*${avdAndPort}`] };
+  const running = () => {
+    const pids = options.runner({ ...query(), cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true })
+      .stdout.split("\n").map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
+    for (const pid of pids) seen.add(pid);
+    return pids;
+  };
+  if (windows) running();
   // An emulator that already exited (or crashed) is stopped too; only one adb still lists is not.
   options.runner({ command: adb, args: ["-s", options.serial, "emu", "kill"], cwd: options.cwd, environment: options.environment, timeoutMs: 60_000, allowFailure: true });
   const listed = (serial: string) => options.runner({ command: adb, args: ["devices"], cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true })
@@ -373,17 +396,6 @@ export async function deleteLocalEmulator(options: { runner: CommandRunner; seri
     if (attempt === 10) throw new Error(`${options.serial} is still running after emu kill`);
     await new Promise(resolve => setTimeout(resolve, 1_000));
   }
-  // An emulator adb has lost (its console port closed, a child defunct) is not listed and ignores emu kill, yet runs on
-  // with its AVD open; its process, by the AVD name and port this capture started it with, is stopped instead.
-  const port = Number(options.serial.slice("emulator-".length));
-  const pattern = `qemu-system.* -avd explore-[a-z]+-[0-9a-f]{8} -port ${port} `;
-  // Windows has no pgrep; PowerShell lists the processes whose command line matches the same pattern.
-  const query = (options.platform ?? process.platform) === "win32"
-    ? { command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command",
-      `Get-CimInstance Win32_Process -Filter "Name LIKE 'qemu-system%'" | Where-Object { $_.CommandLine -match '${pattern}' } | ForEach-Object { $_.ProcessId }`] }
-    : { command: "pgrep", args: ["-f", pattern] };
-  const running = () => options.runner({ ...query, cwd: options.cwd, environment: options.environment, timeoutMs: 30_000, allowFailure: true })
-    .stdout.split("\n").map(Number).filter(pid => Number.isInteger(pid) && pid > 0);
   for (let attempt = 0, pids = running(); pids.length > 0; attempt += 1, pids = running()) {
     if (attempt === 10) throw new Error(`${options.serial} is still running after it was signalled`);
     for (const pid of pids) try { process.kill(pid, attempt < 5 ? "SIGTERM" : "SIGKILL"); } catch { /* it has already exited */ }

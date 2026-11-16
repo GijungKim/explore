@@ -142,7 +142,36 @@ test("on Windows a local emulator starts detached, not through /bin/sh, and a lo
     const query = requests.find(request => request.command === "powershell.exe");
     assert.match(query.args.at(-1), /Win32_Process/);
     assert.match(query.args.at(-1), /-port 5554 /);
+    // emulator.exe holds emulator.log open until it exits, so it is waited for with its qemu child.
+    assert.match(query.args.at(-1), /Name = 'emulator\.exe'/);
     assert.equal(requests.some(request => request.command === "pgrep"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("on Windows a stopped emulator's watchdog, which holds the capture directory, is stopped with it", async () => {
+  const { deleteLocalEmulator } = await import("../../dist/capture/local-simulator.js");
+  const root = await mkdtemp(join(tmpdir(), "explore-win-watchdog-"));
+  try {
+    const environment = { ANDROID_HOME: join(root, "sdk"), EXPLORE_CACHE_DIR: join(root, "cache") };
+    // Odd pids, which Windows never assigns, so signalling them cannot reach a real process.
+    const answers = ["999999991\r\n999999993\r\n", "999999995\r\n", ""];
+    const queries = [], order = [];
+    const runner = request => {
+      order.push(request.command === "powershell.exe" ? "query" : request.args.slice(-2).join(" "));
+      if (request.command !== "powershell.exe") return { stdout: "List of devices attached\r\n\r\n", stderr: "" };
+      queries.push(request.args.at(-1));
+      return { stdout: answers.shift() ?? "", stderr: "" };
+    };
+    await deleteLocalEmulator({ runner, serial: "emulator-5556", cwd: root, environment, platform: "win32" });
+    // A booted emulator's qemu exits soon after emu kill, so its pid, which the watchdog names, is read before.
+    assert.deepEqual(order.slice(0, 2), ["query", "emu kill"]);
+    assert.equal(queries.length, 3);
+    assert.doesNotMatch(queries[0], / -kill /);
+    // `emulator -kill <qemu pid> -sleep 20` names no AVD; it is found by the pids stopped before it.
+    assert.match(queries[1], / -kill \(\?:999999991\|999999993\) -sleep /);
+    assert.match(queries[2], / -kill \(\?:999999991\|999999993\|999999995\) -sleep /);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
