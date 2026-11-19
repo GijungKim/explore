@@ -57,7 +57,7 @@ set -a && . ./.env.explore && set +a && npx @expo/explore explore:binary ./app.a
 
 The model only ever sees the reference; Explore types the value into the field. The value is redacted from the map, the report and errors, and a frame that shows it (the filled-in form, or a profile screen that displays the email) is kept without a screenshot. So make only what is sensitive a secret: a dedicated test email can go in the hints as plain text, and then the account screen keeps its picture. A reference to a variable that is not set fails before a session starts (`EXPLORATION_SECRET_MISSING`); provider keys, `EXPO_TOKEN` and CI variables cannot be referenced.
 
-**When a sign-in cannot be typed** (a one-time code, an email link, Sign in with Apple or Google, a captcha): sign in by hand on a session and use `explore:session`. Sign out is never tapped, so the run stays signed in.
+**When a sign-in cannot be typed** (a one-time code, an email link, Sign in with Apple or Google, a captcha): sign in by hand on a session and use `explore:session`. On this Mac, sign in by hand on a simulator or emulator you started and pass `--simulator local --udid <UDID>` (iOS) or `--serial <SERIAL>` (Android): Explore installs over the app, which keeps the sign-in, and leaves the device running. Sign out is never tapped, so the run stays signed in.
 
 **Other state the hints can describe:**
 

@@ -45,6 +45,7 @@ export async function exploreBinary(): Promise<void> {
     archive: resolve(process.cwd(), archive), output: outputDirectory, progress: say, simulator,
     ...(platform ? { platform } : {}), ...(provider ? { provider } : {}), ...(controller ? { controller } : {}),
     ...(flag("device") ? { device: flag("device")! } : {}), ...(flag("bundle-id") ? { bundleId: flag("bundle-id")! } : {}),
+    ...(flag("udid") ? { udid: flag("udid")! } : {}), ...(flag("serial") ? { serial: flag("serial")! } : {}),
     ...(flag("launch-url") ? { launchUrl: flag("launch-url")! } : {}), ...(flag("hints") ? { hints: flag("hints")! } : {}),
     ...(allowDestructive.length ? { allowDestructive } : {}), ...(flag("model") ? { model: flag("model")! } : {}),
     ...(flag("owner") ? { owner: flag("owner")! } : {}), ...(flag("project") ? { project: flag("project")! } : {}),

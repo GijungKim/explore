@@ -15,7 +15,7 @@ import { SIMULATOR_DOTENV_FILE_NAME, SIMULATOR_DOTENV_HEADER, assertSimulatorSes
 import { argentControllerInvocation } from "../capture/controller-invocation.js";
 import { agentDeviceLauncher, ensureArgentToolServer, ensureController } from "../shared/controller-cache.js";
 import { agentDeviceClaims, approveLinkScheme, createLocalSimulator, deleteLocalEmulator, deleteLocalSimulator, hostEmulatorAbi, installOnLocalEmulator, installOnLocalSimulator, startLocalArgentServer,
-  startLocalEmulator, stopLocalAgentDevice, stopLocalArgentServer, waitForLocalEmulator, waitForLocalSimulator, type LocalArgentServer } from "../capture/local-simulator.js";
+  androidTools, startLocalEmulator, stopLocalAgentDevice, stopLocalArgentServer, waitForLocalEmulator, waitForLocalSimulator, type LocalArgentServer } from "../capture/local-simulator.js";
 import { openLocalCaptureRecord, sweepLocalCaptures } from "../capture/local-registry.js";
 import { screenSpace } from "../capture/route-capture.js";
 import { approveSessionUrlSchemes, simulatorControlActions, type EasCommand } from "../capture/simulator-control.js";
@@ -58,6 +58,13 @@ export type BinaryExploreOptions = {
   controller?: "agent-device" | "argent";
   /** Where the app runs: an Expo Simulators session (the default), or a simulator or emulator this run starts on this machine, with no Expo Services login. */
   simulator?: "eas" | "local";
+  /**
+   * With a local simulator: explore this booted iOS simulator (by UDID) instead of creating one. The app is installed
+   * over the one already there, which keeps its data (a sign-in done by hand, say), and the simulator is left running.
+   */
+  udid?: string;
+  /** The same for Android: explore this running emulator or device (by adb serial), installing over the app and leaving it running. */
+  serial?: string;
   environment?: NodeJS.ProcessEnv;
   runner?: typeof defaultRunner;
   /** Fixed steps to take instead of a model's; no model access is needed. */
@@ -183,6 +190,21 @@ function validatedLimits(options: Pick<BinaryExploreOptions, "maxDurationMinutes
   const limits = { maxDurationMinutes: options.maxDurationMinutes ?? BINARY_LIMITS.maxDurationMinutes, maxScreens: options.maxScreens ?? BINARY_LIMITS.maxScreens, maxActions: options.maxActions ?? BINARY_LIMITS.maxActions };
   for (const [name, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || value > 1000) throw binaryError("EXPLORE_LIMIT_INVALID", `${name} must be an integer between 1 and 1000.`, "Correct the budget flag and rerun.");
   return limits;
+}
+
+const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+// emulator-5554, a USB serial, or a wireless one (192.168.1.5:5555, adb-XXXX._adb-tls-connect._tcp).
+const SERIAL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/** The device --udid or --serial names, checked against the archive's platform; undefined when Explore starts its own. */
+export function existingLocalDevice(options: Pick<BinaryExploreOptions, "udid" | "serial">, platform: Platform, local: boolean): string | undefined {
+  if (!options.udid && !options.serial) return undefined;
+  if (options.udid && options.serial) throw binaryError("LOCAL_DEVICE_FLAG_INVALID", "Pass --udid or --serial, not both.", "Keep the one for the archive's platform: --udid for iOS, --serial for Android.");
+  const flag = options.udid ? "--udid" : "--serial";
+  if (!local) throw binaryError("LOCAL_DEVICE_FLAG_INVALID", `${flag} needs --simulator local.`, `Add --simulator local, or drop ${flag} to run on Expo Simulators.`);
+  if (platform === "ios" && !options.udid) throw binaryError("LOCAL_DEVICE_FLAG_INVALID", "The archive is an iOS build; --serial names an Android device.", "Pass the simulator's UDID with --udid instead.");
+  if (platform === "android" && !options.serial) throw binaryError("LOCAL_DEVICE_FLAG_INVALID", "The archive is an Android build; --udid names an iOS simulator.", "Pass the device's adb serial with --serial instead.");
+  return options.udid ?? options.serial;
 }
 
 function binaryError(code: string, message: string, nextAction: string, details?: Record<string, unknown>): CiError {
@@ -640,6 +662,40 @@ export async function runSessionExploration(options: SessionExploreOptions): Pro
   }
 }
 
+/**
+ * Readies a device the caller started and set up (signed in, say) for a run: checks it is running, approves the app's
+ * links on iOS, and installs the build over the app already there (`simctl install` and `adb install -r` keep its data).
+ * The device is neither recorded for a sweep nor stopped afterwards. Returns its OS version.
+ */
+export function prepareExistingLocalDevice(options: { runner: typeof defaultRunner; platform: Platform; device: string; archive: Pick<InspectedArchive, "urlSchemes">;
+  installPath: string; bundleId: string; work: string; environment: NodeJS.ProcessEnv; sdkEnvironment: NodeJS.ProcessEnv; say: (message: string) => void }): string {
+  const { runner, device, work, environment, say } = options;
+  if (options.platform === "ios") {
+    if (!UDID_PATTERN.test(device)) throw binaryError("LOCAL_DEVICE_NOT_FOUND", "--udid is not a simulator UDID.", "Pass a UDID from `xcrun simctl list devices booted`.");
+    // SAFETY: `simctl list devices -j` prints { devices: { <runtime id>: [{ udid, state, ... }] } }; `devices` is read with a
+    // fallback, and an entry without the expected fields only fails to match, which is reported as LOCAL_DEVICE_NOT_FOUND.
+    const listed = JSON.parse(runner({ command: "xcrun", args: ["simctl", "list", "devices", "-j"], cwd: work, environment, timeoutMs: 60_000 }).stdout) as { devices?: Record<string, Array<{ udid: string; state: string }>> };
+    const runtime = Object.entries(listed.devices ?? {}).find(([, list]) => list.some(entry => entry.udid === device && entry.state === "Booted"))?.[0];
+    if (!runtime) throw binaryError("LOCAL_DEVICE_NOT_FOUND", `No booted simulator has the UDID ${device}.`, "Boot it first, or pass a UDID from `xcrun simctl list devices booted`.");
+    // com.apple.CoreSimulator.SimRuntime.iOS-26-5 -> 26.5
+    const osVersion = runtime.replace(/^.*\.iOS-/, "").replace(/-/g, ".");
+    say(`using the booted simulator ${device} (iOS ${osVersion}); it is left running afterwards`);
+    for (const scheme of options.archive.urlSchemes) approveLinkScheme({ runner, udid: device, scheme, bundleId: options.bundleId, cwd: work, environment });
+    say("installing the app over the one already there (its data is kept)");
+    installOnLocalSimulator({ runner, udid: device, app: options.installPath, cwd: work, environment });
+    return osVersion;
+  }
+  if (!SERIAL_PATTERN.test(device)) throw binaryError("LOCAL_DEVICE_NOT_FOUND", "--serial is not an adb serial.", "Pass a serial from `adb devices`.");
+  const { adb } = androidTools(options.sdkEnvironment);
+  const state = runner({ command: adb, args: ["-s", device, "get-state"], cwd: work, environment, timeoutMs: 30_000, allowFailure: true }).stdout.trim();
+  if (state !== "device") throw binaryError("LOCAL_DEVICE_NOT_FOUND", `adb has no running device with the serial ${device}.`, "Start it first, or pass a serial from `adb devices`.");
+  const osVersion = runner({ command: adb, args: ["-s", device, "shell", "getprop", "ro.build.version.release"], cwd: work, environment, timeoutMs: 30_000 }).stdout.trim() || "unknown";
+  say(`using the running device ${device} (Android ${osVersion}); it is left running afterwards`);
+  say("installing the APK over the one already there (its data is kept)");
+  installOnLocalEmulator({ runner, serial: device, apk: options.installPath, cwd: work, environment: options.sdkEnvironment });
+  return osVersion;
+}
+
 type LocalDevice = NonNullable<ConnectedSessionExploration["local"]>;
 
 /**
@@ -648,18 +704,21 @@ type LocalDevice = NonNullable<ConnectedSessionExploration["local"]>;
  * way, so the next local run stops what a run stopped hard left behind.
  */
 async function withLocalDevice(options: { archive: InspectedArchive; installPath: string; platform: Platform; device: string; bundleId: string;
-  controller: "agent-device" | "argent"; tag: string; work: string; runner: typeof defaultRunner; environment: NodeJS.ProcessEnv; secrets: readonly string[]; say: (message: string) => void; now?: () => number },
+  controller: "agent-device" | "argent"; tag: string; existingDevice?: string; work: string; runner: typeof defaultRunner; environment: NodeJS.ProcessEnv; secrets: readonly string[]; say: (message: string) => void; now?: () => number },
   explore: (connection: SimulatorConnection, local: LocalDevice) => Promise<void>): Promise<void> {
   const { archive, installPath, platform, device, bundleId, controller, tag, work, runner, say } = options;
   const environment = baseEnvironment(options.environment);
   const agentDevice = agentDeviceLauncher(options.environment);
   const stateDirectory = join(work, "agent-device-state");
   const record = await openLocalCaptureRecord(options.environment, work);
-  let udid: string | undefined, serial: string | undefined, argent: LocalArgentServer | undefined;
+  let udid: string | undefined, serial: string | undefined, kept: string | undefined, argent: LocalArgentServer | undefined;
   let primaryError: unknown;
   try {
     let osVersion: string;
-    if (platform === "ios") {
+    if (options.existingDevice) {
+      osVersion = prepareExistingLocalDevice({ runner, platform, device: options.existingDevice, archive, installPath, bundleId, work, environment, sdkEnvironment: options.environment, say });
+      kept = options.existingDevice;
+    } else if (platform === "ios") {
       say(`starting a local ${device} simulator`);
       const created = await createLocalSimulator({ runner, device, name: `Explore ${device} (binary ${tag})`, cwd: work, environment,
         created: async id => { udid = id; await record.update({ udid: id }); } });
@@ -679,7 +738,7 @@ async function withLocalDevice(options: { archive: InspectedArchive; installPath
       say("installing the APK");
       installOnLocalEmulator({ runner, serial: started.serial, apk: installPath, cwd: work, environment });
     }
-    const deviceId = (udid ?? serial)!;
+    const deviceId = (udid ?? kept ?? serial)!;
     let connection: SimulatorConnection = { sessionId: `local-${deviceId}`, daemonBaseUrl: "", daemonAuthToken: "" };
     if (controller === "argent") {
       // Argent drives the device through a tool-server of this run's own.
@@ -729,6 +788,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
     throw binaryError("EXPO_LOGIN_REQUIRED", "No Expo Services login was found.", "Run `eas login` or set EXPO_TOKEN, then rerun explore:binary.");
   }
   const platform = archive.platform;
+  const existingDevice = existingLocalDevice(options, platform, local);
   const bundleId = options.bundleId ?? archive.bundleId;
   const device = options.device ?? (platform === "ios" ? DEFAULT_IOS_DEVICE : DEFAULT_ANDROID_DEVICE);
   say(`${archive.appName} ${archive.version ?? ""} (${bundleId}, ${platform}, ${(archive.bytes / 1048576).toFixed(0)} MB, sha256 ${archive.sha256.slice(0, 12)})`);
@@ -779,7 +839,7 @@ export async function runBinaryExploration(options: BinaryExploreOptions): Promi
       ...(options.launchUrl ? { launchUrl: options.launchUrl } : {}), ...(options.hints ? { hints: options.hints } : {}), ...(options.allowDestructive ? { allowDestructive: options.allowDestructive } : {}) });
     if (local) {
       const tag = map.run.id.replace(/-/g, "").slice(0, 8);
-      await withLocalDevice({ archive, installPath, platform, device, bundleId, controller, tag, work, runner, environment, say, secrets: inputs.values, ...(options.now ? { now: options.now } : {}) },
+      await withLocalDevice({ archive, installPath, platform, device, bundleId, controller, tag, ...(existingDevice ? { existingDevice } : {}), work, runner, environment, say, secrets: inputs.values, ...(options.now ? { now: options.now } : {}) },
         async (connection, localDevice) => {
           sessionId = connection.sessionId;
           ({ runtime, exploration } = await exploreOn(connection, () => "", localDevice));
