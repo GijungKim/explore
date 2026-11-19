@@ -1,3 +1,4 @@
+import { bundleEnvironmentDigest, readBundleEnvironment } from "../capture/bundle-environment.js";
 import { systemRegions } from "../contracts/capture.js";
 import type { RunTarget } from "../types.js";
 import { execFile, spawnSync } from "node:child_process";
@@ -64,7 +65,10 @@ async function evidenceSide(directory: string): Promise<PublicEvidenceSide> {
   return side;
 }
 async function recipe(config: ExploreConfig, plan: SourceCapturePlan, side: "base" | "head", environment: NodeJS.ProcessEnv, instructionsSha256?: string) {
+  // A capture bundled with other --env-file values is a different capture.
+  const bundleEnvironment = await readBundleEnvironment(environment);
   return { inventory: plan.surfaces.map(row => row[`${side}Surface`]).filter(Boolean),
+    ...(bundleEnvironment ? { bundleEnvironment: bundleEnvironmentDigest(bundleEnvironment) } : {}),
     profile: `${config.app.easProfile}:${config.app.bundleId}`,
     config: captureRecipeConfig(config, instructionsSha256),
     toolsCommit: environment.TOOLS_COMMIT || EXPLORE_PACKAGE };

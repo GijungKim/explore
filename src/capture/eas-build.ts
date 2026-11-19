@@ -983,6 +983,11 @@ export async function prepareExactSourceBuild(options: {
   nativeBuildId?: string | undefined;
   /** A simulator app (`.app` directory or `.apk`) built on this machine; a local repack consumes it directly, with no download or env pull. */
   sourceApp?: string | undefined;
+  /**
+   * With `sourceApp`: the variables of `capture --env-file`, bundled in the place Expo Services' environment takes on a
+   * hosted build, so the profile's own `env` still overrides them.
+   */
+  bundleEnvironment?: Record<string, string> | undefined;
   fingerprint: string;
   repackProfile: RepackProfile;
   easEnvironment: NodeJS.ProcessEnv;
@@ -1041,12 +1046,14 @@ export async function prepareExactSourceBuild(options: {
       let downloadedSource: string | undefined;
       if (options.sourceApp) {
         // A build this machine produced (`eas build --local`): nothing is pulled or downloaded from
-        // Expo Services. The bundle environment is the profile's own env from eas.json, applied below.
-        for (const [name, value] of Object.entries(options.repackProfile.profileEnvironment)) {
+        // Expo Services. The bundle environment is the env file's variables (capture --env-file), if any, under the
+        // profile's own env from eas.json, applied below.
+        const fileValues = options.bundleEnvironment ?? {};
+        for (const [name, value] of [...Object.entries(fileValues), ...Object.entries(options.repackProfile.profileEnvironment)]) {
           assertSafeRepackEnvironmentName(name);
           assertSafeRepackEnvironmentValue(name, value);
         }
-        serverEnvironment = { values: {}, secretNames: [] };
+        serverEnvironment = { values: { ...fileValues }, secretNames: [] };
         downloadedSource = options.sourceApp;
       } else {
         if (!options.nativeBuildId) throw new Error("A local repack of an Expo Build needs its build id; build locally (capture.build: local) to repack a local build instead.");

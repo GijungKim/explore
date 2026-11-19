@@ -56,6 +56,22 @@ a capture that uses any `eas` piece again requires `EXPO_TOKEN` (or your
 `eas login`) exactly as upstream does. Hosted previews (`report.preview`) and
 `--upload` are unchanged and remain opt-in Expo Hosting features.
 
+## Bundle with an env file
+
+A hosted build bundles the app's JavaScript with the Expo Services environment variables of its profile's
+`environment`. A local build does not pull them, so an app that reads its API URLs from `EXPO_PUBLIC_*` variables
+kept there falls back to its committed `.env`. Pass a dotenv file instead, read from your checkout and applied to both
+commits:
+
+```sh
+npx @expo/explore capture --env-file ./path/to/.env.review
+```
+
+Its variables take the place of the Expo Services ones: the profile's own `env` in `eas.json` still overrides them.
+They apply to local builds only (`capture.build: local`, the fork default). A change to the file's values is a
+different capture, so cached captures bundled with other values are not reused. The values are passed to the bundler
+as they are, so keep secrets out of the file.
+
 ## Explore a device you set up
 
 `explore:binary --simulator local` creates a fresh simulator or emulator for each run and deletes it afterwards. When

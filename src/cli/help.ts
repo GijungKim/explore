@@ -18,12 +18,14 @@ const GET_STARTED = `Get started (run these in the Expo app's directory):
   doctor --capture [--project DIRECTORY] [--output DIRECTORY] [--target ID | --platform ios|android] [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--yes]
        (captures the committed HEAD like the baseline workflow, with your eas login, and reports each route)
   capture [--base REF] [--head REF | --committed] [--target ID | --platform ios|android] [--parallel N] [--scope all|changes]
-       [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY]
+       [--controller agent-device|argent] [--simulator eas|local] [--repack eas|local] [--upload] [--no-open] [--no-cache] [--output DIRECTORY] [--project DIRECTORY] [--env-file FILE]
        (on this machine: checks out both commits in temporary worktrees, captures them with your eas login (in agent
         mode, also your local claude or codex login), and opens the report; the head is HEAD with your uncommitted changes, as eas build
         uploads them (--committed, or cli.requireCommit in eas.json, leaves them out); the base defaults to where HEAD
         left the default branch;
         without .expo-explore/config.yaml it uses the defaults setup would write;
+        --env-file FILE bundles both commits' JavaScript with that dotenv file's variables (local builds only), in the
+        place Expo Services' environment variables take on a hosted build; the profile's env in eas.json still wins;
         it runs both commits' code as you, so review only commits you would run; capture:review is the same command;
         --controller argent drives the simulator with Argent instead of agent-device, the default (or set
         capture.controller in config.yaml); on Expo Simulators Argent captures one appearance, since it cannot switch it yet;
