@@ -110,3 +110,28 @@ test("a hosted repack without an Expo Build names the local alternative", async 
     routes: [route], repack: "eas", easProfile: "explore", sourceApp, keepApp }), /capture\.build: local/);
   await assert.rejects(lstat(keepApp), { code: "ENOENT" });
 });
+
+test("a local repack bundles with the env file's variables, under the profile's own env", async t => {
+  const { project, sourceApp, keepApp } = await fixture(t);
+  const calls = [];
+  const runner = request => {
+    calls.push(request);
+    mkdirSync(request.args[request.args.indexOf("--output") + 1], { recursive: true });
+    return { stdout: "", stderr: "" };
+  };
+  await prepareExactSourceBuild({ platform: "ios", runner, easCommand: "fake-eas", repackCommand: "fake-repack",
+    project, fingerprint: "fingerprint", repackProfile: profile, easEnvironment: {}, repackEnvironment: { EXPO_TOKEN: "must-not-leak" },
+    routes: [route], repack: "local", sourceApp, keepApp,
+    bundleEnvironment: { EXPO_PUBLIC_API_URL: "https://api.example.test", EXPO_PUBLIC_FLAG: "from-file" } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].environment.EXPO_PUBLIC_API_URL, "https://api.example.test");
+  assert.equal(calls[0].environment.EXPO_PUBLIC_FLAG, "1", "the profile's env in eas.json wins over the file");
+  assert.equal("EXPO_TOKEN" in calls[0].environment, false);
+});
+
+test("a local repack refuses an env file variable it cannot pass safely", async t => {
+  const { project, sourceApp, keepApp } = await fixture(t);
+  await assert.rejects(prepareExactSourceBuild({ platform: "ios", runner: () => assert.fail("must not repack"), easCommand: "fake-eas", repackCommand: "fake-repack",
+    project, fingerprint: "fingerprint", repackProfile: profile, easEnvironment: {}, repackEnvironment: {},
+    routes: [route], repack: "local", sourceApp, keepApp, bundleEnvironment: { EXPO_PUBLIC_BAD: "line\nbreak\u0007" } }), /EXPO_PUBLIC_BAD cannot be represented safely/);
+});

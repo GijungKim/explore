@@ -2,6 +2,7 @@ import { cp, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { commitSubject, keepReports } from "./report-commands.js";
+import { BUNDLE_ENV_FILE_VARIABLE, readBundleEnvironment } from "../capture/bundle-environment.js";
 import { createInterface } from "node:readline/promises";
 import { runPublicCi, runBaselineCi, runCompareCi } from "../ci/pipeline.js";
 import { exportCiReport, publishCiReportComment } from "../report/artifact.js";
@@ -296,6 +297,13 @@ async function localReview(): Promise<void> {
   const platform = platformFlag(), target = targetFlag();
   if (has("expires-in")) warnIgnoredExpiry("--expires-in");
   const parallel = has("parallel") ? positiveInteger("parallel") : undefined;
+  const envFile = flag("env-file");
+  if (envFile) {
+    // Read once here, so a bad file fails before any checkout or build; the captures read the same path.
+    const path = resolve(process.cwd(), envFile);
+    await readBundleEnvironment({ [BUNDLE_ENV_FILE_VARIABLE]: path });
+    process.env[BUNDLE_ENV_FILE_VARIABLE] = path;
+  }
   const result = await runLocalReview({ project: flag("project") ?? process.cwd(), base: flag("base"), head: flag("head"), ...(target ? { target } : {}),
     ...(parallel ? { parallel } : {}),
     // --include-untracked is accepted from before untracked files were included by default.

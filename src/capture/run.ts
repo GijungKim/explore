@@ -1,3 +1,4 @@
+import { readBundleEnvironment } from "./bundle-environment.js";
 import { appearanceArgs, argentColorSchemes, bundleColorSchemes, mergeSchemeOutcomes, resolveColorSchemes, routeIdOfScreen, schemeScreenId, type AppearanceSetting, type ColorScheme } from "./appearance.js";
 import { assertNoCaptureHealthIssues, capturedEvidenceInDoubt, captureHealthIssues, partitionCaptureHealthIssues } from "./health.js";
 import { type RouteResetSetting } from "./route-reset.js";
@@ -256,6 +257,11 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
   const controller = options.controller ?? "agent-device";
   const local = options.simulator === "local";
   const restrictedEnvironment = baseEnvironment(sourceEnvironment);
+  // capture --env-file: values a local build's JavaScript is bundled with, where a hosted build has Expo Services' variables.
+  const bundleEnvironment = await readBundleEnvironment(sourceEnvironment);
+  if (bundleEnvironment && options.build !== "local") throw new CiError({ code: "BUNDLE_ENV_FILE_UNSUPPORTED", stage: "configuration",
+    message: "--env-file applies to local builds; this capture builds on Expo Services, which bundles with its own environment variables.",
+    nextAction: "Drop --env-file, or build locally (capture.build: local or --build local)." });
   const easEnvironment: NodeJS.ProcessEnv = { ...restrictedEnvironment };
   if (options.expoToken) easEnvironment.EXPO_TOKEN = options.expoToken;
   // EAS supports an already-installed local build helper. Keep this executable
@@ -663,7 +669,7 @@ async function executeCiMap(options: CiMapOptions, setStage: (stage: string) => 
       say("local build finished; repacking it with the route observer on this machine");
       startSession(); await repacking?.();
       const repacked = await prepareExactSourceBuild({ platform: options.platform, runner, easCommand: options.easCommand, repackCommand: options.repackCommand,
-        project, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: "local", easProfile: options.easProfile, sourceApp, keepApp, ...repackWaits(false) });
+        project, fingerprint: sourceFingerprint, repackProfile: profile, easEnvironment, repackEnvironment: restrictedEnvironment, routes: inventory, repack: "local", easProfile: options.easProfile, sourceApp, keepApp, ...(bundleEnvironment ? { bundleEnvironment } : {}), ...repackWaits(false) });
       if (!repacked) throw new CiError({ code: "CAPTURE_OBSERVER_BUILD_UNSUPPORTED", stage: "instrumentation",
         message: "The local build cannot be instrumented with the required route observer.",
         nextAction: "Use a simulator profile with a reproducible bundle environment so both revisions can be repacked with the same observer." });
