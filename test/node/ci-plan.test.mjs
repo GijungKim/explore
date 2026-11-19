@@ -90,3 +90,21 @@ test("consistency failures write focused structural differences and retain both 
   const bounded=JSON.parse(await readFile(join(temp,"plan-diff.json"),"utf8"));
   assert.equal(bounded.differences.length,100); assert.equal(bounded.truncated,true);
 });
+
+test("an app in a monorepo larger than the snapshot limit is read from its own directory alone", async t => {
+  const {root,put,commit}=await repository(t);
+  await put("apps/mobile/app/one.tsx",page); await put("apps/mobile/tsconfig.json","{}");
+  commit("app");
+  // 50,001 files elsewhere in the repository, written straight into the index so the test stays fast.
+  const blob=execFileSync("git",["-C",root,"hash-object","-w","--stdin"],{input:"x",encoding:"utf8"}).trim();
+  const entries=Array.from({length:50_001},(_, index)=>`100644 ${blob}\tpackages/bulk/${index}.txt`).join("\n")+"\n";
+  execFileSync("git",["-C",root,"update-index","--index-info"],{input:entries});
+  git(root,"commit","-q","-m","bulk");
+  const sha=git(root,"rev-parse","HEAD");
+  assert.throws(()=>readSourceSnapshot(root,sha),/exceeds 50,000 files/);
+  const scoped=readSourceSnapshot(join(root,"apps/mobile"),sha,"apps/mobile/");
+  assert.deepEqual([...scoped.keys()].sort(),["apps/mobile/app/one.tsx","apps/mobile/tsconfig.json"]);
+  assert.equal(scoped.get("apps/mobile/app/one.tsx"),page);
+  // The directory is matched literally, not as a pathspec pattern.
+  assert.equal(readSourceSnapshot(root,sha,"apps/mob*/").size,0);
+});
