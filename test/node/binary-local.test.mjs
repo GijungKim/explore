@@ -125,7 +125,7 @@ function bootedRunner(state = "Booted") {
   return { requests, runner: request => {
     if (request.command === "xcrun" && request.args.join(" ") === "simctl list devices -j") {
       requests.push(request);
-      return { stdout: JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [{ udid: UDID, state, name: "Signed in" }] } }), stderr: "" };
+      return { stdout: JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [{ udid: UDID, state, name: "Signed in", deviceTypeIdentifier: DEVICE_TYPE }] } }), stderr: "" };
     }
     return runner(request);
   } };
@@ -147,6 +147,7 @@ test("explore:binary --udid explores a booted simulator, installing over the app
   const controller = requests.filter(request => request.command !== "xcrun" && request.args[0] !== "--version" && request.args[0] !== "close");
   for (const request of controller) assert.deepEqual(request.args.slice(request.args.indexOf("--udid"), request.args.indexOf("--udid") + 2), ["--udid", UDID]);
   assert.equal(result.runtime.osVersion, "26.5");
+  assert.equal(result.runtime.deviceModel, "iPhone 17 Pro", "the model comes from the device type, not the name its owner gave it");
   assert.equal(result.session.id, `local-${UDID}`);
   assert.ok(progress.some(message => message.includes("left running")));
   assert.deepEqual(await readdir(join(root, ".cache", "expo-explore", "local-captures")), [], "nothing is recorded for a sweep");
@@ -180,14 +181,16 @@ test("an existing Android device is checked with adb and the APK installed over 
     calls.push([request.command, ...request.args].join(" "));
     if (request.args.includes("get-state")) return { stdout: "device\n", stderr: "" };
     if (request.args.includes("ro.build.version.release")) return { stdout: "16\n", stderr: "" };
+    if (request.args.includes("ro.boot.qemu.avd_name")) return { stdout: "Pixel_8_API_36\n", stderr: "" };
     return { stdout: "", stderr: "" };
   };
-  const osVersion = prepareExistingLocalDevice({ runner, platform: "android", device: "emulator-5554", archive: { urlSchemes: [] }, installPath: "/tmp/app.apk",
+  const prepared = prepareExistingLocalDevice({ runner, platform: "android", device: "emulator-5554", archive: { urlSchemes: [] }, installPath: "/tmp/app.apk",
     bundleId: "dev.example.app", work: "/tmp", environment: sdk, sdkEnvironment: sdk, say: () => {} });
-  assert.equal(osVersion, "16");
+  assert.deepEqual(prepared, { osVersion: "16", model: "Pixel_8_API_36" });
   assert.deepEqual(calls, [
     "/sdk/platform-tools/adb -s emulator-5554 get-state",
     "/sdk/platform-tools/adb -s emulator-5554 shell getprop ro.build.version.release",
+    "/sdk/platform-tools/adb -s emulator-5554 shell getprop ro.boot.qemu.avd_name",
     "/sdk/platform-tools/adb -s emulator-5554 install -r /tmp/app.apk",
   ]);
   assert.equal(calls.some(call => / emu kill|avdmanager|emulator /.test(call)), false, "nothing starts or stops the device");

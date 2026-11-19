@@ -71,6 +71,10 @@ Explore installs the build over the app already there (`simctl install` / `adb i
 and leaves the device running, so the next run starts from the same state. The device is not recorded for the sweep
 that removes what an interrupted run left behind.
 
+On Android, stop other tools that drive the device first (Argent, Appium, a UI Automator test): Android allows one
+`UiAutomation` client at a time, and while another holds it Explore's snapshots fail and the run stops as if the app
+had quit.
+
 ## Notes and limits
 
 - `eas build --local` is eas-cli running the build on your machine; it does
