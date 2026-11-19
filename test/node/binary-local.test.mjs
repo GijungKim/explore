@@ -116,3 +116,88 @@ test("an opened iPhone Duo's screenshots are stored upright, and the run records
   assert.equal(map.run.environment.orientation, "landscape");
   assert.equal(result.runtime.orientation, "landscape");
 });
+
+const { existingLocalDevice, prepareExistingLocalDevice } = await tsImport("../../src/binary/run.ts", import.meta.url);
+
+/** A Mac with one booted iOS 26.5 simulator, UDID, that the caller started and signed in on. */
+function bootedRunner(state = "Booted") {
+  const { requests, runner } = localRunner();
+  return { requests, runner: request => {
+    if (request.command === "xcrun" && request.args.join(" ") === "simctl list devices -j") {
+      requests.push(request);
+      return { stdout: JSON.stringify({ devices: { "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [{ udid: UDID, state, name: "Signed in", deviceTypeIdentifier: DEVICE_TYPE }] } }), stderr: "" };
+    }
+    return runner(request);
+  } };
+}
+
+test("explore:binary --udid explores a booted simulator, installing over the app and leaving the simulator running", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-udid-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { requests, runner } = bootedRunner();
+  const progress = [];
+  const session = { provider: "anthropic", model: "test", async preflight() {}, async run() { return { stopReason: "done" }; } };
+  const result = await runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", udid: UDID, provider: "anthropic", runner,
+    progress: message => progress.push(message), createSession: () => session, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key" } });
+
+  const simctl = requests.filter(request => request.command === "xcrun").map(request => request.args.slice(1).join(" "));
+  assert.equal(simctl.some(command => /^(create|boot|delete|shutdown) /.test(command)), false, "the simulator is neither created nor removed");
+  assert.ok(simctl.some(command => command.startsWith(`install ${UDID} `)), "the build is installed over the app already there");
+  assert.ok(simctl.includes(`spawn ${UDID} defaults write com.apple.launchservices.schemeapproval com.apple.CoreSimulator.CoreSimulatorBridge-->example -string dev.example.app`));
+  const controller = requests.filter(request => request.command !== "xcrun" && request.args[0] !== "--version" && request.args[0] !== "close");
+  for (const request of controller) assert.deepEqual(request.args.slice(request.args.indexOf("--udid"), request.args.indexOf("--udid") + 2), ["--udid", UDID]);
+  assert.equal(result.runtime.osVersion, "26.5");
+  assert.equal(result.runtime.deviceModel, "iPhone 17 Pro", "the model comes from the device type, not the name its owner gave it");
+  assert.equal(result.session.id, `local-${UDID}`);
+  assert.ok(progress.some(message => message.includes("left running")));
+  assert.deepEqual(await readdir(join(root, ".cache", "expo-explore", "local-captures")), [], "nothing is recorded for a sweep");
+});
+
+test("explore:binary --udid refuses a simulator that is not booted before a model or device is used", async t => {
+  const root = await mkdtemp(join(tmpdir(), "explore-binary-udid-off-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { requests, runner } = bootedRunner("Shutdown");
+  const session = { provider: "anthropic", model: "test", async preflight() {}, async run() { throw new Error("must not explore"); } };
+  await assert.rejects(runBinaryExploration({ archive: await simulatorApp(root), output: join(root, "out"), simulator: "local", udid: UDID, provider: "anthropic", runner,
+    createSession: () => session, environment: { PATH: process.env.PATH, HOME: root, ANTHROPIC_API_KEY: "key" } }), { code: "LOCAL_DEVICE_NOT_FOUND" });
+  assert.equal(requests.some(request => request.command === "xcrun" && /^(install|create|delete)$/.test(request.args[1])), false);
+});
+
+test("--udid and --serial each name their own platform's device, and only with --simulator local", () => {
+  assert.equal(existingLocalDevice({}, "ios", true), undefined);
+  assert.equal(existingLocalDevice({ udid: UDID }, "ios", true), UDID);
+  assert.equal(existingLocalDevice({ serial: "emulator-5554" }, "android", true), "emulator-5554");
+  const invalid = { code: "LOCAL_DEVICE_FLAG_INVALID" };
+  assert.throws(() => existingLocalDevice({ serial: "emulator-5554" }, "ios", true), invalid);
+  assert.throws(() => existingLocalDevice({ udid: UDID }, "android", true), invalid);
+  assert.throws(() => existingLocalDevice({ udid: UDID }, "ios", false), invalid);
+  assert.throws(() => existingLocalDevice({ udid: UDID, serial: "emulator-5554" }, "ios", true), invalid);
+});
+
+test("an existing Android device is checked with adb and the APK installed over the app with -r", () => {
+  const calls = [];
+  const sdk = { ANDROID_HOME: "/sdk", PATH: process.env.PATH };
+  const runner = request => {
+    calls.push([request.command, ...request.args].join(" "));
+    if (request.args.includes("get-state")) return { stdout: "device\n", stderr: "" };
+    if (request.args.includes("ro.build.version.release")) return { stdout: "16\n", stderr: "" };
+    if (request.args.includes("ro.boot.qemu.avd_name")) return { stdout: "Pixel_8_API_36\n", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+  const prepared = prepareExistingLocalDevice({ runner, platform: "android", device: "emulator-5554", archive: { urlSchemes: [] }, installPath: "/tmp/app.apk",
+    bundleId: "dev.example.app", work: "/tmp", environment: sdk, sdkEnvironment: sdk, say: () => {} });
+  assert.deepEqual(prepared, { osVersion: "16", model: "Pixel_8_API_36" });
+  assert.deepEqual(calls, [
+    "/sdk/platform-tools/adb -s emulator-5554 get-state",
+    "/sdk/platform-tools/adb -s emulator-5554 shell getprop ro.build.version.release",
+    "/sdk/platform-tools/adb -s emulator-5554 shell getprop ro.boot.qemu.avd_name",
+    "/sdk/platform-tools/adb -s emulator-5554 install -r /tmp/app.apk",
+  ]);
+  assert.equal(calls.some(call => / emu kill|avdmanager|emulator /.test(call)), false, "nothing starts or stops the device");
+
+  const offline = request => request.args.includes("get-state") ? { stdout: "offline\n", stderr: "" } : assert.fail(`unexpected ${request.args.join(" ")}`);
+  assert.throws(() => prepareExistingLocalDevice({ runner: offline, platform: "android", device: "emulator-5554", archive: { urlSchemes: [] }, installPath: "/tmp/app.apk",
+    bundleId: "dev.example.app", work: "/tmp", environment: sdk, sdkEnvironment: sdk, say: () => {} }), { code: "LOCAL_DEVICE_NOT_FOUND" });
+  assert.throws(() => prepareExistingLocalDevice({ runner: offline, platform: "android", device: "-s; rm -rf /", archive: { urlSchemes: [] }, installPath: "/tmp/app.apk",
+    bundleId: "dev.example.app", work: "/tmp", environment: sdk, sdkEnvironment: sdk, say: () => {} }), { code: "LOCAL_DEVICE_NOT_FOUND" });
+});

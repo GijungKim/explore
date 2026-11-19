@@ -56,6 +56,25 @@ a capture that uses any `eas` piece again requires `EXPO_TOKEN` (or your
 `eas login`) exactly as upstream does. Hosted previews (`report.preview`) and
 `--upload` are unchanged and remain opt-in Expo Hosting features.
 
+## Explore a device you set up
+
+`explore:binary --simulator local` creates a fresh simulator or emulator for each run and deletes it afterwards. When
+the app needs state a model cannot set up, such as a sign-in with a one-time code, start the device yourself, install
+the build, sign in by hand, and point Explore at it:
+
+```sh
+npx @expo/explore explore:binary ./MyApp.app --simulator local --udid <UDID>      # xcrun simctl list devices booted
+npx @expo/explore explore:binary ./my-app.apk --simulator local --serial <SERIAL> # adb devices
+```
+
+Explore installs the build over the app already there (`simctl install` / `adb install -r` keep its data), explores it,
+and leaves the device running, so the next run starts from the same state. The device is not recorded for the sweep
+that removes what an interrupted run left behind.
+
+On Android, stop other tools that drive the device first (Argent, Appium, a UI Automator test): Android allows one
+`UiAutomation` client at a time, and while another holds it Explore's snapshots fail and the run stops as if the app
+had quit.
+
 ## Notes and limits
 
 - `eas build --local` is eas-cli running the build on your machine; it does

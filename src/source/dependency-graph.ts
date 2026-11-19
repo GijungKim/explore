@@ -8,15 +8,20 @@ import { readTsconfigAlias, resolveTsconfigAlias, resolveTsconfigBaseUrl } from 
 /** Repository path → file text at one exact commit. Non-source files carry an empty string. */
 export type SourceSnapshot = ReadonlyMap<string, string>;
 
-/** Read every tracked file name at an exact commit, plus the text of TypeScript/JavaScript sources and tsconfig files. */
-export function readSourceSnapshot(repository: string, commit: string): SourceSnapshot {
+/**
+ * Read every tracked file name at an exact commit, plus the text of TypeScript/JavaScript sources and tsconfig files.
+ * A `prefix` (a repository path ending in `/`, as `git rev-parse --show-prefix` prints it) limits the read to that
+ * directory, so an app inside a large monorepo is not refused for the size of the whole repository.
+ */
+export function readSourceSnapshot(repository: string, commit: string, prefix = ""): SourceSnapshot {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("A full commit SHA is required");
   const git = (args: string[]) => {
     const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
     if (result.error || result.status !== 0) throw new Error("Could not read the exact source snapshot", { cause: result.error });
     return result.stdout;
   };
-  const entries = git(["ls-tree", "--full-tree", "-r", "-z", commit]).split("\0").filter(Boolean);
+  const entries = git(["ls-tree", "--full-tree", "-r", "-z", commit, ...(prefix ? ["--", `:(top,literal)${prefix}`] : [])])
+    .split("\0").filter(Boolean);
   if (entries.length > 50_000) throw new Error("Source snapshot exceeds 50,000 files");
   const snapshot = new Map<string, string>();
   for (const entry of entries) {

@@ -77,7 +77,7 @@ export async function buildVerifiedPlan(options: {
   const { config } = options;
   const basePrefix = projectPrefix(options.baseProject);
   const headPrefix = projectPrefix(options.headProject);
-  const scopedSnapshot = (project: string, sha: string, prefix: string) => new Map([...readSourceSnapshot(project, sha)]
+  const scopedSnapshot = (project: string, sha: string, prefix: string) => new Map([...readSourceSnapshot(project, sha, prefix)]
     .filter(([path]) => path.startsWith(prefix)).map(([path, source]) => [path.slice(prefix.length), source]));
   const baseFiles = scopedSnapshot(options.baseProject, options.baseSha, basePrefix);
   const headFiles = scopedSnapshot(options.headProject, options.headSha, headPrefix);

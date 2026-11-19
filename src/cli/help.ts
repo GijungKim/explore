@@ -51,6 +51,8 @@ const BINARY = `Prebuilt apps (no source needed; runs with your local claude or 
         and opens the report in the local Viewer (--upload hosts it instead, --no-open skips the Viewer, --port N);
         iOS needs Xcode, Android the SDK (ANDROID_HOME) with platform-tools, cmdline-tools, the emulator and a system image for this Mac
        Flags, all optional: --device NAME --bundle-id ID --launch-url URL --hints "what to focus on"
+        --udid UDID (iOS) / --serial SERIAL (Android), with --simulator local: explore a simulator or emulator you already
+        started, installing over the app there (its data, such as a sign-in done by hand, is kept) and leaving it running
         --controller agent-device|argent (the device controller; agent-device by default)
         (a sign-in in --hints is written as {{secret:NAME}}: Explore types the value of the environment variable NAME,
         and the model and the report only see the reference)

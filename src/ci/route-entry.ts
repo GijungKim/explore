@@ -147,7 +147,7 @@ export function readRouteEntry(project: string, config: RouteEntryInput): RouteE
   if (head.error || head.status !== 0) throw new Error("Route analysis reads committed source. Commit the app to Git, then rerun.");
   const commit = head.stdout.trim();
   const prefix = projectPrefix(project);
-  const files = new Map([...readSourceSnapshot(project, commit)]
+  const files = new Map([...readSourceSnapshot(project, commit, prefix)]
     .filter(([path]) => path.startsWith(prefix)).map(([path, source]) => [path.slice(prefix.length), source]));
   const inventory = discoverRoutes(files, {
     provider: config.navigation.provider,
